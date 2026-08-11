@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Credit Card Expense Tracker</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.min.js" defer></script>
-    <script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js" defer></script>
+    <script src="https://unpkg.com/@azure/msal-browser@2.38.3/lib/msal-browser.min.js" defer></script>
     <style>
         * {
             margin: 0;
@@ -830,6 +830,23 @@
         return msalInstance;
     }
 
+    // Polls for the deferred MSAL script to finish loading, up to timeoutMs.
+    function waitForMsal(timeoutMs) {
+        return new Promise(resolve => {
+            if (typeof msal !== 'undefined') { resolve(true); return; }
+            const start = Date.now();
+            const interval = setInterval(() => {
+                if (typeof msal !== 'undefined') {
+                    clearInterval(interval);
+                    resolve(true);
+                } else if (Date.now() - start > timeoutMs) {
+                    clearInterval(interval);
+                    resolve(false);
+                }
+            }, 200);
+        });
+    }
+
     function updateOneDriveStatus() {
         const el = document.getElementById('odStatus');
         if (el) el.textContent = graphAccount ? `Connected as ${graphAccount.username}` : 'Not connected';
@@ -843,8 +860,12 @@
             return;
         }
         if (typeof msal === 'undefined') {
-            showAlert('OneDrive sign-in library has not finished loading yet — wait a couple of seconds and try again, or check your network/firewall.', 'error');
-            return;
+            // Give the deferred script a few seconds to finish before giving up.
+            const loaded = await waitForMsal(5000);
+            if (!loaded) {
+                showAlert('Could not load the OneDrive sign-in library — check your internet connection/firewall and try again.', 'error');
+                return;
+            }
         }
         try {
             const msalApp = initMsal();
