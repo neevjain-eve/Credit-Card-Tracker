@@ -560,7 +560,7 @@
             <h3 style="margin-top: 30px; margin-bottom: 15px;">All Transactions</h3>
             <div class="file-input-wrapper" style="max-width: 400px;">
                 <label>🔍 Filter by name/description</label>
-                <input type="text" id="dashNameFilter" placeholder="e.g. Amazon" oninput="refreshTable()" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:5px;">
+                <input type="text" id="dashNameFilter" placeholder="e.g. Amazon or John Doe" oninput="refreshTable()" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:5px;">
             </div>
             <table>
                 <thead>
@@ -568,6 +568,7 @@
                         <th>Date</th>
                         <th>Month</th>
                         <th>Description</th>
+                        <th>Name</th>
                         <th>Amount (₹)</th>
                         <th>Type</th>
                         <th>Status</th>
@@ -577,7 +578,7 @@
                     </tr>
                 </thead>
                 <tbody id="transactionBody">
-                    <tr><td colspan="9" style="text-align: center; padding: 40px; color: #999;">No transactions yet. Go to Upload tab to import data.</td></tr>
+                    <tr><td colspan="10" style="text-align: center; padding: 40px; color: #999;">No transactions yet. Go to Upload tab to import data.</td></tr>
                 </tbody>
             </table>
         </div>
@@ -596,7 +597,7 @@
                 <button class="btn btn-success" onclick="downloadTemplate()" style="padding: 12px 30px; font-size: 16px;">
                     📥 Download Template
                 </button>
-                <p style="margin-top: 10px; font-size: 12px;">Columns: <strong>Date, Transaction, Amount, Dr/Cr</strong> — e.g. <code>2026-08-01, Amazon Purchase, 5000, Dr</code></p>
+                <p style="margin-top: 10px; font-size: 12px;">Columns: <strong>Date, Transaction, Amount, Dr/Cr, Name</strong> — e.g. <code>2026-08-01, Amazon Purchase, 5000, Dr, John Doe</code>. The <strong>Name</strong> column maps each transaction to the person it belongs to.</p>
             </div>
 
             <!-- File Upload -->
@@ -883,11 +884,11 @@
             console.log('Downloading template (CSV, no external library needed)...');
 
             const rows = [
-                ['Date', 'Transaction', 'Amount', 'Dr/Cr'],
-                ['2026-08-01', 'Amazon Purchase', '5000', 'Dr'],
-                ['2026-08-05', 'Refund Received', '500', 'Cr'],
-                ['2026-08-10', 'Hotel Booking', '15000', 'Dr'],
-                ['2026-08-15', 'Client Reimbursement', '10000', 'Cr']
+                ['Date', 'Transaction', 'Amount', 'Dr/Cr', 'Name'],
+                ['2026-08-01', 'Amazon Purchase', '5000', 'Dr', 'John Doe'],
+                ['2026-08-05', 'Refund Received', '500', 'Cr', 'John Doe'],
+                ['2026-08-10', 'Hotel Booking', '15000', 'Dr', 'Jane Smith'],
+                ['2026-08-15', 'Client Reimbursement', '10000', 'Cr', 'Jane Smith']
             ];
 
             // Build CSV text using COMMA delimiter — this is what Excel expects by
@@ -1015,7 +1016,7 @@
 
             const parts = line.includes('|') ? line.split('|') : splitCSVLine(line);
             if (parts.length >= 4) {
-                const parsed = parseRow(parts[0], parts[1], parts[2], parts[3]);
+                const parsed = parseRow(parts[0], parts[1], parts[2], parts[3], parts[4]);
                 if (parsed) {
                     rows.push(parsed);
                 } else {
@@ -1038,13 +1039,13 @@
             const row = rows[i];
             if (!row || !row[0]) continue;
 
-            const parsed = parseRow(row[0], row[1], row[2], row[3]);
+            const parsed = parseRow(row[0], row[1], row[2], row[3], row[4]);
             if (parsed) parsedRows.push(parsed);
         }
         return parsedRows;
     }
 
-    function parseRow(dateVal, transactionVal, amountVal, drCrVal) {
+    function parseRow(dateVal, transactionVal, amountVal, drCrVal, nameVal) {
         if (!dateVal || !transactionVal || !amountVal || !drCrVal) return null;
 
         const amountStr = String(amountVal).trim().replace(/,/g, '');
@@ -1067,7 +1068,8 @@
             date: String(dateVal).trim(),
             transaction: String(transactionVal).trim(),
             amount: amount,
-            type: type
+            type: type,
+            name: nameVal !== undefined && nameVal !== null ? String(nameVal).trim() : ''
         };
     }
 
@@ -1076,14 +1078,17 @@
         return (document.getElementById('previewNameFilter')?.value || '').trim().toLowerCase();
     }
 
-    // Returns the subset of parsedData whose transaction name/description
-    // matches the current preview filter. With no filter, returns everything —
-    // this is also what gets imported, so a bulk file with many rows can be
-    // narrowed down to just the vendor/description you want before importing.
+    // Returns the subset of parsedData whose transaction description or
+    // person name matches the current preview filter. With no filter, returns
+    // everything — this is also what gets imported, so a bulk file with many
+    // rows can be narrowed down to just the vendor/person you want before importing.
     function getFilteredPreviewData() {
         const filterText = getPreviewFilterText();
         if (!filterText) return parsedData;
-        return parsedData.filter(row => row.transaction.toLowerCase().includes(filterText));
+        return parsedData.filter(row =>
+            row.transaction.toLowerCase().includes(filterText) ||
+            (row.name || '').toLowerCase().includes(filterText)
+        );
     }
 
     function renderPreviewTable() {
@@ -1098,16 +1103,17 @@
             html += '<p style="margin-bottom:10px; color:#666; font-size:13px;">Only the rows matching your filter will be imported. Clear the filter to import everything.</p>';
         }
 
-        html += '<table><thead><tr><th>Date</th><th>Transaction</th><th>Amount</th><th>Type</th></tr></thead><tbody>';
+        html += '<table><thead><tr><th>Date</th><th>Transaction</th><th>Name</th><th>Amount</th><th>Type</th></tr></thead><tbody>';
 
         if (filtered.length === 0) {
-            html += '<tr><td colspan="4" style="text-align:center; padding: 20px; color:#999;">No transactions match that filter</td></tr>';
+            html += '<tr><td colspan="5" style="text-align:center; padding: 20px; color:#999;">No transactions match that filter</td></tr>';
         }
 
         filtered.slice(0, 15).forEach(row => {
             html += `<tr>
                 <td>${row.date}</td>
                 <td>${row.transaction}</td>
+                <td>${row.name || '-'}</td>
                 <td>₹${row.amount.toFixed(2)}</td>
                 <td><span class="status-badge ${row.type === 'Debit' ? 'debit' : 'credit'}">${row.type}</span></td>
             </tr>`;
@@ -1147,6 +1153,7 @@
                 year: year,
                 monthYear: `${month}/${year}`,
                 transaction: row.transaction,
+                name: row.name || '',
                 amount: row.amount,
                 type: row.type,
                 status: 'Pending',
@@ -1205,17 +1212,20 @@
         const tbody = document.getElementById('transactionBody');
 
         if (transactions.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; padding: 40px; color: #999;">No transactions yet. Go to Upload tab to import data.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 40px; color: #999;">No transactions yet. Go to Upload tab to import data.</td></tr>';
             return;
         }
 
         const nameFilter = (document.getElementById('dashNameFilter')?.value || '').trim().toLowerCase();
         const filteredTransactions = nameFilter
-            ? transactions.filter(t => t.transaction.toLowerCase().includes(nameFilter))
+            ? transactions.filter(t =>
+                t.transaction.toLowerCase().includes(nameFilter) ||
+                (t.name || '').toLowerCase().includes(nameFilter)
+              )
             : transactions;
 
         if (filteredTransactions.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; padding: 40px; color: #999;">No transactions match that filter</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 40px; color: #999;">No transactions match that filter</td></tr>';
             return;
         }
 
@@ -1224,6 +1234,7 @@
                 <td>${t.date}</td>
                 <td><strong>${t.monthYear}</strong></td>
                 <td>${t.transaction}</td>
+                <td>${t.name || '-'}</td>
                 <td>₹${t.amount.toFixed(2)}</td>
                 <td><span class="status-badge ${t.type === 'Debit' ? 'debit' : 'credit'}">${t.type}</span></td>
                 <td><span class="status-badge ${t.status === 'Pending' ? 'pending' : 'submitted'}">${t.status}</span></td>
@@ -1422,6 +1433,7 @@
                             <tr>
                                 <th>Date</th>
                                 <th>Description</th>
+                                <th>Name</th>
                                 <th>Amount (₹)</th>
                                 <th>Type</th>
                                 <th>Status</th>
@@ -1432,6 +1444,7 @@
                                 <tr>
                                     <td>${t.date}</td>
                                     <td>${t.transaction}</td>
+                                    <td>${t.name || '-'}</td>
                                     <td>${t.amount.toFixed(2)}</td>
                                     <td><span class="status-badge ${t.type === 'Debit' ? 'debit' : 'credit'}">${t.type}</span></td>
                                     <td><span class="status-badge ${t.status === 'Pending' ? 'pending' : 'submitted'}">${t.status}</span></td>
