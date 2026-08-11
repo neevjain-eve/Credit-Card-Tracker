@@ -1189,13 +1189,25 @@
         document.getElementById('selectedFileName').style.display = 'none';
     }
 
+    // Returns only the transactions the currently logged-in user is allowed to
+    // see. Admins see everything; every other user only sees rows whose "Name"
+    // column matches their own account name — so e.g. Ajay Kumar's login only
+    // ever shows Ajay Kumar's transactions, never anyone else's.
+    function getVisibleTransactions() {
+        if (!currentUser) return [];
+        if (currentUser.role === 'Admin') return transactions;
+        const myName = (currentUser.name || '').trim().toLowerCase();
+        return transactions.filter(t => (t.name || '').trim().toLowerCase() === myName);
+    }
+
     // Dashboard
     function refreshDashboard() {
-        const debit = transactions.filter(t => t.type === 'Debit').reduce((sum, t) => sum + t.amount, 0);
-        const credit = transactions.filter(t => t.type === 'Credit').reduce((sum, t) => sum + t.amount, 0);
-        const pending = transactions.filter(t => t.status === 'Pending').length;
+        const visible = getVisibleTransactions();
+        const debit = visible.filter(t => t.type === 'Debit').reduce((sum, t) => sum + t.amount, 0);
+        const credit = visible.filter(t => t.type === 'Credit').reduce((sum, t) => sum + t.amount, 0);
+        const pending = visible.filter(t => t.status === 'Pending').length;
 
-        document.getElementById('totalTrans').textContent = transactions.length;
+        document.getElementById('totalTrans').textContent = visible.length;
         document.getElementById('totalDebit').textContent = '₹' + debit.toFixed(2);
         document.getElementById('totalCredit').textContent = '₹' + credit.toFixed(2);
         document.getElementById('pendingTrans').textContent = pending;
@@ -1215,19 +1227,20 @@
 
     function refreshTable() {
         const tbody = document.getElementById('transactionBody');
+        const visible = getVisibleTransactions();
 
-        if (transactions.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 40px; color: #999;">No transactions yet. Go to Upload tab to import data.</td></tr>';
+        if (visible.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 40px; color: #999;">${transactions.length === 0 ? 'No transactions yet. Go to Upload tab to import data.' : 'No transactions found for your account yet.'}</td></tr>`;
             return;
         }
 
         const nameFilter = (document.getElementById('dashNameFilter')?.value || '').trim().toLowerCase();
         const filteredTransactions = nameFilter
-            ? transactions.filter(t =>
+            ? visible.filter(t =>
                 t.transaction.toLowerCase().includes(nameFilter) ||
                 (t.name || '').toLowerCase().includes(nameFilter)
               )
-            : transactions;
+            : visible;
 
         if (filteredTransactions.length === 0) {
             tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 40px; color: #999;">No transactions match that filter</td></tr>';
@@ -1370,7 +1383,7 @@
 
     // Submit
     function submitPendingTransactions() {
-        const pending = transactions.filter(t => t.status === 'Pending');
+        const pending = getVisibleTransactions().filter(t => t.status === 'Pending');
 
         if (pending.length === 0) {
             showAlert('✓ All transactions are already submitted!', 'info');
@@ -1411,7 +1424,7 @@
         const monthFilter = document.getElementById('stmtMonthFilter')?.value || 'All';
         const yearFilter = document.getElementById('stmtYearFilter')?.value || 'All';
 
-        const filtered = transactions.filter(t => {
+        const filtered = getVisibleTransactions().filter(t => {
             if (monthFilter !== 'All' && t.month !== monthFilter) return false;
             if (yearFilter !== 'All' && String(t.year) !== String(yearFilter)) return false;
             return true;
@@ -1470,9 +1483,45 @@
         const monthFilter = document.getElementById('subMonthFilter')?.value || 'All';
         const yearFilter = document.getElementById('subYearFilter')?.value || 'All';
 
+        // Admins see every submission as a whole. Everyone else only sees the
+        // slice of each submission that belongs to their own transactions —
+        // a submission that bundled several people's spend gets recomputed
+        // down to just this user's date/month/count/totals.
+        let rows;
+        if (currentUser?.role === 'Admin') {
+            rows = submissions.map(s => ({
+                date: s.date,
+                month: s.month,
+                count: s.transactionCount,
+                debit: s.totalDebit,
+                credit: s.totalCredit,
+                net: s.netAmount
+            }));
+        } else {
+            const myTransactions = getVisibleTransactions().filter(t => t.submissionId);
+            const bySubmission = {};
+            myTransactions.forEach(t => {
+                if (!bySubmission[t.submissionId]) bySubmission[t.submissionId] = [];
+                bySubmission[t.submissionId].push(t);
+            });
+            rows = Object.entries(bySubmission).map(([subId, trans]) => {
+                const sub = submissions.find(s => s.id === Number(subId));
+                const debit = trans.filter(t => t.type === 'Debit').reduce((sum, t) => sum + t.amount, 0);
+                const credit = trans.filter(t => t.type === 'Credit').reduce((sum, t) => sum + t.amount, 0);
+                return {
+                    date: sub ? sub.date : '-',
+                    month: trans[0].monthYear,
+                    count: trans.length,
+                    debit: debit,
+                    credit: credit,
+                    net: debit - credit
+                };
+            });
+        }
+
         // submission.month is stored like "August/2025"
-        const filtered = submissions.filter(s => {
-            const [subMonth, subYear] = String(s.month || '').split('/');
+        const filtered = rows.filter(r => {
+            const [subMonth, subYear] = String(r.month || '').split('/');
             if (monthFilter !== 'All' && subMonth !== monthFilter) return false;
             if (yearFilter !== 'All' && String(subYear) !== String(yearFilter)) return false;
             return true;
@@ -1483,14 +1532,14 @@
             return;
         }
 
-        tbody.innerHTML = filtered.sort((a, b) => new Date(b.date) - new Date(a.date)).map(s => `
+        tbody.innerHTML = filtered.sort((a, b) => new Date(b.date) - new Date(a.date)).map(r => `
             <tr>
-                <td>${s.date}</td>
-                <td>${s.month}</td>
-                <td>${s.transactionCount}</td>
-                <td>₹${s.totalDebit.toFixed(2)}</td>
-                <td>₹${s.totalCredit.toFixed(2)}</td>
-                <td>₹${s.netAmount.toFixed(2)}</td>
+                <td>${r.date}</td>
+                <td>${r.month}</td>
+                <td>${r.count}</td>
+                <td>₹${r.debit.toFixed(2)}</td>
+                <td>₹${r.credit.toFixed(2)}</td>
+                <td>₹${r.net.toFixed(2)}</td>
             </tr>
         `).join('');
     }
