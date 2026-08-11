@@ -510,8 +510,12 @@
         </div>
         <div class="header-right">
             <p>Role: <strong id="roleDisplay">-</strong></p>
-            <p>☁️ OneDrive: <strong id="odStatus">Not connected</strong></p>
-            <button class="logout-btn" onclick="connectOneDrive()" style="margin-right:8px;">🔗 Connect OneDrive</button>
+            <!-- OneDrive sync is Admin-only: only Admin/staff should hold the
+                 credentials that can read/write the shared file. Client
+                 logins never see or use this, so they can never end up with
+                 the full multi-client dataset in their browser. -->
+            <p class="admin-only">☁️ OneDrive: <strong id="odStatus">Not connected</strong></p>
+            <button class="logout-btn admin-only" onclick="connectOneDrive()" style="margin-right:8px;">🔗 Connect OneDrive</button>
             <button class="logout-btn" onclick="logout()">Logout</button>
         </div>
     </div>
@@ -600,8 +604,8 @@
 
             <!-- OneDrive Sync Setup (Admin only, one-time setup) -->
             <div class="upload-section" style="background:#eef2ff; border-color:#c7d2fe;">
-                <h3>☁️ OneDrive Sync Setup</h3>
-                <p style="margin-bottom: 15px; color: #666; font-size: 13px;">One-time setup so every teammate's login auto-syncs through a shared OneDrive file. Requires an Azure AD "App Registration" Client ID (ask your admin/IT for this). Do this once, then send the Client ID + Shared File Link to whoever maintains this app so they can be baked in for everyone.</p>
+                <h3>☁️ OneDrive Sync Setup (Staff/Admin only)</h3>
+                <p style="margin-bottom: 15px; color: #666; font-size: 13px;"><strong>Note:</strong> this connects your firm's own OneDrive as the backup/sync store — it is intentionally restricted to Admin/staff logins only. Client logins (e.g. Archit, Dilip, etc.) never see a "Connect OneDrive" option and never receive this shared file, since it contains every client's data. Clients continue to see whatever's already saved to the device/browser they're using. One-time setup: requires an Azure AD "App Registration" Client ID (ask your admin/IT for this).</p>
 
                 <div class="file-input-wrapper">
                     <label>Azure AD App Client ID</label>
@@ -853,6 +857,15 @@
     }
 
     async function connectOneDrive() {
+        // OneDrive sync is restricted to Admin/staff. Client logins must
+        // never pull the shared file, since it currently contains every
+        // client's transactions — only the UI filters by name, so anyone
+        // who downloaded the full file could see everyone else's data.
+        if (currentUser?.role !== 'Admin') {
+            showAlert('OneDrive sync is only available to Admin/staff accounts.', 'error');
+            return;
+        }
+
         console.log('Connect OneDrive clicked. Client ID configured:', !!oneDriveConfig.clientId, 'MSAL loaded:', typeof msal !== 'undefined');
 
         if (!oneDriveConfig.clientId) {
@@ -985,6 +998,7 @@
     // silently (besides a console log) so the app keeps working offline /
     // before OneDrive has been connected.
     async function pushToOneDrive() {
+        if (currentUser?.role !== 'Admin') return; // OneDrive sync is Admin/staff only
         if (!graphAccount || !oneDriveConfig.shareLink) return;
         try {
             const token = await getGraphToken();
@@ -1016,6 +1030,7 @@
     // (from a previous "Connect OneDrive" in this app), reconnect quietly
     // without popping up a login window again.
     async function attemptSilentOneDriveReconnect() {
+        if (currentUser?.role !== 'Admin') return; // OneDrive sync is Admin/staff only
         if (!oneDriveConfig.clientId) return;
         try {
             const msalApp = initMsal();
