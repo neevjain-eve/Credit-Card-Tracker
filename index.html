@@ -801,6 +801,7 @@
     };
 
     let msalInstance = null;
+    let msalInitPromise = null; // resolved ahead of time so the click that opens the login popup doesn't need to await anything first (browsers block popups opened after an async gap)
     let graphAccount = null;
     let oneDriveItemRef = null; // { driveId, itemId } once resolved
     let oneDriveSyncTimer = null;
@@ -821,6 +822,7 @@
                 },
                 cache: { cacheLocation: 'localStorage' }
             });
+            msalInitPromise = msalInstance.initialize();
         }
         return msalInstance;
     }
@@ -831,8 +833,14 @@
     }
 
     async function connectOneDrive() {
+        console.log('Connect OneDrive clicked. Client ID configured:', !!oneDriveConfig.clientId, 'MSAL loaded:', typeof msal !== 'undefined');
+
         if (!oneDriveConfig.clientId) {
             showAlert('OneDrive sync is not set up yet. An Admin needs to complete OneDrive Sync Setup in the Upload tab first.', 'error');
+            return;
+        }
+        if (typeof msal === 'undefined') {
+            showAlert('OneDrive sign-in library has not finished loading yet — wait a couple of seconds and try again, or check your network/firewall.', 'error');
             return;
         }
         try {
@@ -841,7 +849,10 @@
                 showAlert('Could not start OneDrive sign-in (MSAL library failed to load).', 'error');
                 return;
             }
-            await msalApp.initialize();
+            // Only await if initialize() hasn't already settled — keeps the
+            // popup call as close to the original click as possible.
+            if (msalInitPromise) await msalInitPromise;
+
             const result = await msalApp.loginPopup({ scopes: ['Files.ReadWrite', 'User.Read'] });
             graphAccount = result.account;
             msalApp.setActiveAccount(graphAccount);
@@ -854,6 +865,10 @@
             startOneDriveAutoSync();
         } catch (err) {
             console.error('OneDrive connect error:', err);
+            if (err && (err.errorCode === 'popup_window_error' || err.errorCode === 'user_cancelled' || String(err.message || '').toLowerCase().includes('popup'))) {
+                showAlert('Your browser blocked the OneDrive sign-in popup. Please allow popups for this site and click "Connect OneDrive" again.', 'error');
+                return;
+            }
             showAlert('Could not connect to OneDrive: ' + err.message, 'error');
         }
     }
@@ -981,7 +996,7 @@
         try {
             const msalApp = initMsal();
             if (!msalApp) return;
-            await msalApp.initialize();
+            if (msalInitPromise) await msalInitPromise;
             const accounts = msalApp.getAllAccounts();
             if (accounts.length === 0) return;
 
@@ -1061,11 +1076,20 @@
         loadData();
         console.log('App initialized');
         console.log('XLSX library loaded:', typeof XLSX !== 'undefined');
+        console.log('MSAL library loaded:', typeof msal !== 'undefined');
 
         const clientIdInput = document.getElementById('odClientIdInput');
         const shareLinkInput = document.getElementById('odShareLinkInput');
         if (clientIdInput) clientIdInput.value = oneDriveConfig.clientId || '';
         if (shareLinkInput) shareLinkInput.value = oneDriveConfig.shareLink || '';
+
+        // Kick off MSAL's required initialize() as early as possible so it has
+        // already settled by the time someone clicks "Connect OneDrive" —
+        // otherwise the awaited gap before opening the login popup can get it
+        // silently blocked by the browser's popup blocker.
+        if (oneDriveConfig.clientId) {
+            try { initMsal(); } catch (err) { console.warn('MSAL pre-init skipped:', err); }
+        }
     }
 
     // LocalStorage
