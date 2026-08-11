@@ -1195,8 +1195,18 @@
             document.getElementById('currentUser').textContent = `Welcome, ${user.name}`;
             document.getElementById('roleDisplay').textContent = user.role.toUpperCase();
 
-            if (user.role === 'Admin') {
-                document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'block');
+            // Explicitly show/hide admin-only controls (incl. OneDrive sync)
+            // on every login, not just when logging in as Admin — otherwise
+            // a leftover "display:block" from a previous Admin session in
+            // this same browser tab stays visible for the next, non-admin
+            // login. Also fully drop any OneDrive session state that isn't
+            // this user's own, so a client can never see or use it.
+            const isAdmin = user.role === 'Admin';
+            document.querySelectorAll('.admin-only').forEach(el => {
+                el.style.display = isAdmin ? 'block' : 'none';
+            });
+            if (!isAdmin) {
+                resetOneDriveSessionState();
             }
 
             refreshDashboard();
@@ -1207,7 +1217,20 @@
         }
     }
 
+    // Clears any in-memory OneDrive/Graph session so it can never be reused
+    // by whichever user is currently logged into the app.
+    function resetOneDriveSessionState() {
+        graphAccount = null;
+        oneDriveItemRef = null;
+        if (oneDriveSyncTimer) {
+            clearInterval(oneDriveSyncTimer);
+            oneDriveSyncTimer = null;
+        }
+        updateOneDriveStatus();
+    }
+
     function logout() {
+        resetOneDriveSessionState();
         currentUser = null;
         document.getElementById('loginPage').style.display = 'flex';
         document.getElementById('mainApp').style.display = 'none';
