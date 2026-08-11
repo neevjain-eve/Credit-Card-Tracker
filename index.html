@@ -524,6 +524,11 @@
         <button class="nav-btn" onclick="switchTab('submissions')">✓ Submission History</button>
     </div>
 
+    <!-- Global alert banner — lives outside every tab-content so messages
+         (e.g. from the header's Connect OneDrive button) are visible no
+         matter which tab is currently open. -->
+    <div id="globalAlert" class="alert" style="margin: 15px 20px 0;"></div>
+
     <!-- Content -->
     <div class="content">
         <!-- Dashboard Tab -->
@@ -679,8 +684,6 @@
                     <button class="btn btn-danger" onclick="cancelImport()">✕ Cancel</button>
                 </div>
             </div>
-
-            <div id="uploadAlert" class="alert"></div>
         </div>
 
         <!-- Monthly Statements Tab -->
@@ -1121,8 +1124,11 @@
     }
 
     // Alerts
+    // Global alert banner (see #globalAlert in the HTML) — sits outside every
+    // tab-content div so it's visible no matter which tab is open, including
+    // when triggered by header controls like "Connect OneDrive".
     function showAlert(message, type = 'info') {
-        const alertEl = document.getElementById('uploadAlert') || createAlert();
+        const alertEl = document.getElementById('globalAlert') || createAlert();
         alertEl.textContent = message;
         alertEl.className = `alert show ${type}`;
         setTimeout(() => alertEl.classList.remove('show'), 4000);
@@ -1130,8 +1136,11 @@
 
     function createAlert() {
         const div = document.createElement('div');
-        div.id = 'uploadAlert';
-        document.querySelector('.content').insertBefore(div, document.querySelector('.content').firstChild);
+        div.id = 'globalAlert';
+        div.style.margin = '15px 20px 0';
+        const mainApp = document.getElementById('mainApp');
+        const content = document.querySelector('.content');
+        mainApp.insertBefore(div, content);
         return div;
     }
 
