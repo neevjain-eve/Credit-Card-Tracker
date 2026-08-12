@@ -1252,12 +1252,27 @@
 
     function savePublishConfig() {
         const token = document.getElementById('publishTokenInput')?.value.trim() || '';
+        const existingToken = publishConfig.token || localStorage.getItem('publishToken') || '';
+
+        // Guard-rail: if a token was already saved and the field is now
+        // empty, this is almost always an accidental blank save (e.g. the
+        // page reloaded and the field didn't get re-filled) rather than an
+        // intentional "clear my token" action. Require explicit confirmation
+        // before silently overwriting a real token with nothing.
+        if (!token && existingToken) {
+            const confirmClear = confirm('The Auto-Publish token field is empty. Save anyway and CLEAR the saved token? Click Cancel if you didn\'t mean to remove it.');
+            if (!confirmClear) {
+                showAlert('Auto-Publish token left unchanged.', 'success');
+                return;
+            }
+        }
+
         publishConfig = { token };
         // Deliberately NOT logged/shown anywhere else, and never sent to the
         // app maintainer — this token should only ever live in Admin's own
         // browser local storage.
         localStorage.setItem('publishToken', token);
-        showAlert('✓ Auto-Publish settings saved in this browser.', 'success');
+        showAlert(token ? '✓ Auto-Publish settings saved in this browser.' : '✓ Auto-Publish token cleared.', 'success');
     }
 
     // UTF-8 safe base64 encoding, required by GitHub's Contents API.
