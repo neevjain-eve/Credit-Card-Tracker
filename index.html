@@ -627,17 +627,14 @@
                 <p style="margin-top: 10px; font-size: 12px; color: #666;">Steps: Save your Client ID → Connect OneDrive (signs you into Microsoft) → Create Data File → Create Shareable Edit Link → Save OneDrive Settings again to store the link → share the Client ID + Link with your app maintainer. Every teammate then clicks "Connect OneDrive" in the header with their own Microsoft account to read/write the same file.</p>
             </div>
 
-            <!-- Auto-Publish Setup (Admin only, one-time setup) -->
+            <!-- Auto-Publish Setup (Admin only, one-time setup) — talks directly
+                 to GitHub's API, no third-party hosting involved. -->
             <div class="upload-section" style="background:#ecfdf5; border-color:#a7f3d0;">
-                <h3>⚡ Auto-Publish Setup</h3>
-                <p style="margin-bottom: 15px; color: #666; font-size: 13px;">One-time setup so every import/change automatically publishes each client's own file — no manual export needed after this. Requires a small Cloudflare Worker (ask your app maintainer for the deployed URL). <strong>The Sync Secret below is sensitive — it stays only in this browser's local storage and should never be shared or committed anywhere public.</strong></p>
+                <h3>⚡ Auto-Publish Setup (GitHub only, no external hosting)</h3>
+                <p style="margin-bottom: 15px; color: #666; font-size: 13px;">One-time setup so every import/change automatically publishes each client's own file straight to this repo — no manual export, no third-party server. <strong>The token below is sensitive: it is saved only in this browser's local storage, is never committed to the repo, and is never sent to anyone else. Use a token scoped only to this one repository (fine-grained token, Contents: Read and write) rather than a broad all-repo token.</strong></p>
                 <div class="file-input-wrapper">
-                    <label>Publish Endpoint URL</label>
-                    <input type="text" id="publishUrlInput" placeholder="https://your-worker.your-subdomain.workers.dev" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:5px;">
-                </div>
-                <div class="file-input-wrapper">
-                    <label>Sync Secret (kept local to this browser only)</label>
-                    <input type="password" id="publishSecretInput" placeholder="the SYNC_SECRET you set on the Worker" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:5px;">
+                    <label>GitHub Personal Access Token (kept local to this browser only)</label>
+                    <input type="password" id="publishTokenInput" placeholder="github_pat_... or ghp_..." style="width:100%; padding:10px; border:1px solid #ddd; border-radius:5px;">
                 </div>
                 <div class="button-group">
                     <button class="btn btn-primary" onclick="savePublishConfig()">💾 Save Auto-Publish Settings</button>
@@ -1241,40 +1238,72 @@
         showAlert(`✓ Exported ${data.transactions.length} transaction(s) for ${user.name}. Send the downloaded file (or copy the text below) to your app maintainer to publish as clients/${safeName}.json.`, 'success');
     }
 
-    // ---- Auto-Publish (Cloudflare Worker) ----
+    // ---- Auto-Publish (writes directly to GitHub, no third-party hosting) ----
+    // Admin's browser calls the GitHub Contents API directly using a token
+    // that lives only in this browser's local storage — never committed to
+    // the repo, never sent anywhere except api.github.com.
+
+    const GITHUB_OWNER = 'neevjain-eve';
+    const GITHUB_REPO = 'Credit-Card-Tracker';
 
     let publishConfig = {
-        url: localStorage.getItem('publishUrl') || '',
-        secret: localStorage.getItem('publishSecret') || ''
+        token: localStorage.getItem('publishToken') || ''
     };
 
     function savePublishConfig() {
-        const url = document.getElementById('publishUrlInput')?.value.trim() || '';
-        const secret = document.getElementById('publishSecretInput')?.value.trim() || '';
-        publishConfig = { url, secret };
-        localStorage.setItem('publishUrl', url);
+        const token = document.getElementById('publishTokenInput')?.value.trim() || '';
+        publishConfig = { token };
         // Deliberately NOT logged/shown anywhere else, and never sent to the
-        // app maintainer — this secret should only ever live in Admin's own
+        // app maintainer — this token should only ever live in Admin's own
         // browser local storage.
-        localStorage.setItem('publishSecret', secret);
+        localStorage.setItem('publishToken', token);
         showAlert('✓ Auto-Publish settings saved in this browser.', 'success');
     }
 
-    // Publishes one client's file via the Worker. Returns true/false.
+    // UTF-8 safe base64 encoding, required by GitHub's Contents API.
+    function base64EncodeUtf8(str) {
+        const bytes = new TextEncoder().encode(str);
+        let binary = '';
+        bytes.forEach(b => { binary += String.fromCharCode(b); });
+        return btoa(binary);
+    }
+
+    // Publishes one client's file straight to GitHub via the Contents API.
+    // Looks up the file's current sha first (needed to update vs create),
+    // then PUTs the new content. Returns true/false.
     async function publishClientFile(username, opts) {
         const silent = opts && opts.silent;
-        if (!publishConfig.url || !publishConfig.secret) return false;
+        if (!publishConfig.token) return false;
         const user = users.find(u => u.username === username);
         if (!user) return false;
 
         try {
             const data = buildClientPayload(user);
-            const res = await fetch(publishConfig.url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'x-sync-secret': publishConfig.secret },
-                body: JSON.stringify({ filename: `${cssSafeId(username)}.json`, content: JSON.stringify(data) })
+            const path = `clients/${cssSafeId(username)}.json`;
+            const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${path}`;
+            const ghHeaders = {
+                Authorization: `Bearer ${publishConfig.token}`,
+                Accept: 'application/vnd.github+json'
+            };
+
+            let sha;
+            const getRes = await fetch(apiUrl, { headers: ghHeaders });
+            if (getRes.status === 200) {
+                sha = (await getRes.json()).sha;
+            } else if (getRes.status !== 404) {
+                throw new Error(await getRes.text());
+            }
+
+            const putRes = await fetch(apiUrl, {
+                method: 'PUT',
+                headers: { ...ghHeaders, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: `Auto-sync ${cssSafeId(username)}.json via app`,
+                    content: base64EncodeUtf8(JSON.stringify(data)),
+                    ...(sha ? { sha } : {})
+                })
             });
-            if (!res.ok) throw new Error(await res.text());
+            if (!putRes.ok) throw new Error(await putRes.text());
             return true;
         } catch (err) {
             if (!silent) console.error(`Auto-publish failed for ${user.name}:`, err);
@@ -1288,8 +1317,8 @@
             showAlert('Only Admin can publish client data.', 'error');
             return;
         }
-        if (!publishConfig.url || !publishConfig.secret) {
-            showAlert('Set up Auto-Publish first (Publish Endpoint URL + Sync Secret).', 'error');
+        if (!publishConfig.token) {
+            showAlert('Set up Auto-Publish first (paste your GitHub token and save).', 'error');
             return;
         }
         const clients = users.filter(u => u.role !== 'Admin');
@@ -1298,7 +1327,7 @@
             const ok = await publishClientFile(u.username);
             if (ok) okCount++;
         }
-        showAlert(`✓ Published ${okCount} of ${clients.length} client file(s).`, okCount === clients.length ? 'success' : 'error');
+        showAlert(`✓ Published ${okCount} of ${clients.length} client file(s) directly to GitHub.`, okCount === clients.length ? 'success' : 'error');
     }
 
     // Fire-and-forget: called automatically from saveData() after every
@@ -1306,7 +1335,7 @@
     // Silently does nothing if Auto-Publish isn't configured yet.
     function autoPublishAllClients() {
         if (currentUser?.role !== 'Admin') return;
-        if (!publishConfig.url || !publishConfig.secret) return;
+        if (!publishConfig.token) return;
         const clients = users.filter(u => u.role !== 'Admin');
         clients.forEach(u => { publishClientFile(u.username, { silent: true }); });
     }
@@ -1375,10 +1404,8 @@
         if (clientIdInput) clientIdInput.value = oneDriveConfig.clientId || '';
         if (shareLinkInput) shareLinkInput.value = oneDriveConfig.shareLink || '';
 
-        const publishUrlInput = document.getElementById('publishUrlInput');
-        const publishSecretInput = document.getElementById('publishSecretInput');
-        if (publishUrlInput) publishUrlInput.value = publishConfig.url || '';
-        if (publishSecretInput) publishSecretInput.value = publishConfig.secret || '';
+        const publishTokenInput = document.getElementById('publishTokenInput');
+        if (publishTokenInput) publishTokenInput.value = publishConfig.token || '';
 
         // Kick off MSAL's required initialize() as early as possible so it has
         // already settled by the time someone clicks "Connect OneDrive" —
