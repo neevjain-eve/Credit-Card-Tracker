@@ -627,10 +627,28 @@
                 <p style="margin-top: 10px; font-size: 12px; color: #666;">Steps: Save your Client ID → Connect OneDrive (signs you into Microsoft) → Create Data File → Create Shareable Edit Link → Save OneDrive Settings again to store the link → share the Client ID + Link with your app maintainer. Every teammate then clicks "Connect OneDrive" in the header with their own Microsoft account to read/write the same file.</p>
             </div>
 
-            <!-- Per-Client Data Export (Admin only) -->
+            <!-- Auto-Publish Setup (Admin only, one-time setup) -->
+            <div class="upload-section" style="background:#ecfdf5; border-color:#a7f3d0;">
+                <h3>⚡ Auto-Publish Setup</h3>
+                <p style="margin-bottom: 15px; color: #666; font-size: 13px;">One-time setup so every import/change automatically publishes each client's own file — no manual export needed after this. Requires a small Cloudflare Worker (ask your app maintainer for the deployed URL). <strong>The Sync Secret below is sensitive — it stays only in this browser's local storage and should never be shared or committed anywhere public.</strong></p>
+                <div class="file-input-wrapper">
+                    <label>Publish Endpoint URL</label>
+                    <input type="text" id="publishUrlInput" placeholder="https://your-worker.your-subdomain.workers.dev" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:5px;">
+                </div>
+                <div class="file-input-wrapper">
+                    <label>Sync Secret (kept local to this browser only)</label>
+                    <input type="password" id="publishSecretInput" placeholder="the SYNC_SECRET you set on the Worker" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:5px;">
+                </div>
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="savePublishConfig()">💾 Save Auto-Publish Settings</button>
+                    <button class="btn btn-success" onclick="publishAllClients()">⚡ Publish All Clients Now</button>
+                </div>
+            </div>
+
+            <!-- Per-Client Data Export (Admin only, manual fallback) -->
             <div class="upload-section" style="background:#fff7ed; border-color:#fed7aa;">
-                <h3>👥 Per-Client Data Export</h3>
-                <p style="margin-bottom: 15px; color: #666; font-size: 13px;">This is how each client actually gets their own data on their own device. For each client below, click "Export JSON" — it filters the current data down to just that person's transactions and downloads a small JSON file (also shown as copy-able text). Send that file/text to your app maintainer to publish it in the app's repo — once it's there, that client's login automatically picks it up, no Microsoft account or sign-in needed on their end. Re-export a client's data any time it changes.</p>
+                <h3>👥 Per-Client Data Export (manual fallback)</h3>
+                <p style="margin-bottom: 15px; color: #666; font-size: 13px;">If Auto-Publish above isn't set up yet, use this instead: for each client below, click "Export JSON" to download/copy their data, then send it to your app maintainer to publish manually. Once Auto-Publish is configured, this is no longer needed for day-to-day use.</p>
                 <div id="clientLinksContainer"></div>
             </div>
 
@@ -1179,10 +1197,19 @@
         `).join('');
     }
 
+    // Builds the JSON payload (as an object) containing just one user's own
+    // transactions + relevant submissions. Shared by export and auto-publish.
+    function buildClientPayload(user) {
+        const myName = (user.name || '').trim().toLowerCase();
+        const clientTransactions = transactions.filter(t => (t.name || '').trim().toLowerCase() === myName);
+        const relevantSubmissionIds = new Set(clientTransactions.map(t => t.submissionId).filter(Boolean));
+        const clientSubmissions = submissions.filter(s => relevantSubmissionIds.has(s.id));
+        return { transactions: clientTransactions, submissions: clientSubmissions, exportedAt: Date.now() };
+    }
+
     // Admin-only: filters current data down to one client's own rows and
     // exports it as a JSON file download (and shows it in a copy-able text
-    // box). Send the file/text to your app maintainer to publish at
-    // clients/<safe-username>.json in the repo — no OneDrive step needed.
+    // box). Manual fallback for when Auto-Publish isn't set up.
     function exportClientData(username) {
         if (currentUser?.role !== 'Admin') {
             showAlert('Only Admin can export client data.', 'error');
@@ -1191,11 +1218,8 @@
         const user = users.find(u => u.username === username);
         if (!user) return;
 
-        const myName = (user.name || '').trim().toLowerCase();
-        const clientTransactions = transactions.filter(t => (t.name || '').trim().toLowerCase() === myName);
-        const relevantSubmissionIds = new Set(clientTransactions.map(t => t.submissionId).filter(Boolean));
-        const clientSubmissions = submissions.filter(s => relevantSubmissionIds.has(s.id));
-        const payload = JSON.stringify({ transactions: clientTransactions, submissions: clientSubmissions, exportedAt: Date.now() }, null, 2);
+        const data = buildClientPayload(user);
+        const payload = JSON.stringify(data, null, 2);
 
         const safeName = cssSafeId(username);
         const blob = new Blob([payload], { type: 'application/json' });
@@ -1214,7 +1238,77 @@
             output.style.display = 'block';
         }
 
-        showAlert(`✓ Exported ${clientTransactions.length} transaction(s) for ${user.name}. Send the downloaded file (or copy the text below) to your app maintainer to publish as clients/${safeName}.json.`, 'success');
+        showAlert(`✓ Exported ${data.transactions.length} transaction(s) for ${user.name}. Send the downloaded file (or copy the text below) to your app maintainer to publish as clients/${safeName}.json.`, 'success');
+    }
+
+    // ---- Auto-Publish (Cloudflare Worker) ----
+
+    let publishConfig = {
+        url: localStorage.getItem('publishUrl') || '',
+        secret: localStorage.getItem('publishSecret') || ''
+    };
+
+    function savePublishConfig() {
+        const url = document.getElementById('publishUrlInput')?.value.trim() || '';
+        const secret = document.getElementById('publishSecretInput')?.value.trim() || '';
+        publishConfig = { url, secret };
+        localStorage.setItem('publishUrl', url);
+        // Deliberately NOT logged/shown anywhere else, and never sent to the
+        // app maintainer — this secret should only ever live in Admin's own
+        // browser local storage.
+        localStorage.setItem('publishSecret', secret);
+        showAlert('✓ Auto-Publish settings saved in this browser.', 'success');
+    }
+
+    // Publishes one client's file via the Worker. Returns true/false.
+    async function publishClientFile(username, opts) {
+        const silent = opts && opts.silent;
+        if (!publishConfig.url || !publishConfig.secret) return false;
+        const user = users.find(u => u.username === username);
+        if (!user) return false;
+
+        try {
+            const data = buildClientPayload(user);
+            const res = await fetch(publishConfig.url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'x-sync-secret': publishConfig.secret },
+                body: JSON.stringify({ filename: `${cssSafeId(username)}.json`, content: JSON.stringify(data) })
+            });
+            if (!res.ok) throw new Error(await res.text());
+            return true;
+        } catch (err) {
+            if (!silent) console.error(`Auto-publish failed for ${user.name}:`, err);
+            return false;
+        }
+    }
+
+    // Admin-only, manual trigger: republish every client's file right now.
+    async function publishAllClients() {
+        if (currentUser?.role !== 'Admin') {
+            showAlert('Only Admin can publish client data.', 'error');
+            return;
+        }
+        if (!publishConfig.url || !publishConfig.secret) {
+            showAlert('Set up Auto-Publish first (Publish Endpoint URL + Sync Secret).', 'error');
+            return;
+        }
+        const clients = users.filter(u => u.role !== 'Admin');
+        let okCount = 0;
+        for (const u of clients) {
+            const ok = await publishClientFile(u.username);
+            if (ok) okCount++;
+        }
+        showAlert(`✓ Published ${okCount} of ${clients.length} client file(s).`, okCount === clients.length ? 'success' : 'error');
+    }
+
+    // Fire-and-forget: called automatically from saveData() after every
+    // change, so imports/edits show up for clients without any manual step.
+    // Silently does nothing if Auto-Publish isn't configured yet.
+    function autoPublishAllClients() {
+        if (currentUser?.role !== 'Admin') return;
+        if (!publishConfig.url || !publishConfig.secret) return;
+        const clients = users.filter(u => u.role !== 'Admin');
+        clients.forEach(u => { publishClientFile(u.username, { silent: true }); });
     }
 
     // (Deprecated OneDrive-anonymous-link approach — kept only so any old
@@ -1281,6 +1375,11 @@
         if (clientIdInput) clientIdInput.value = oneDriveConfig.clientId || '';
         if (shareLinkInput) shareLinkInput.value = oneDriveConfig.shareLink || '';
 
+        const publishUrlInput = document.getElementById('publishUrlInput');
+        const publishSecretInput = document.getElementById('publishSecretInput');
+        if (publishUrlInput) publishUrlInput.value = publishConfig.url || '';
+        if (publishSecretInput) publishSecretInput.value = publishConfig.secret || '';
+
         // Kick off MSAL's required initialize() as early as possible so it has
         // already settled by the time someone clicks "Connect OneDrive" —
         // otherwise the awaited gap before opening the login popup can get it
@@ -1300,6 +1399,7 @@
                 submissionId
             }));
             pushToOneDrive(); // fire-and-forget sync to the shared OneDrive file
+            autoPublishAllClients(); // fire-and-forget: republish every client's own file
         } catch (error) {
             console.error('Save error:', error);
             showAlert('Browser storage is full (attached bills take up space). Try removing an old bill or attaching a smaller file, then try again.', 'error');
