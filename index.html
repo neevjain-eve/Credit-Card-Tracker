@@ -627,10 +627,10 @@
                 <p style="margin-top: 10px; font-size: 12px; color: #666;">Steps: Save your Client ID → Connect OneDrive (signs you into Microsoft) → Create Data File → Create Shareable Edit Link → Save OneDrive Settings again to store the link → share the Client ID + Link with your app maintainer. Every teammate then clicks "Connect OneDrive" in the header with their own Microsoft account to read/write the same file.</p>
             </div>
 
-            <!-- Per-Client Read-Only Sync Links (Admin only) -->
+            <!-- Per-Client Data Export (Admin only) -->
             <div class="upload-section" style="background:#fff7ed; border-color:#fed7aa;">
-                <h3>👥 Per-Client Read-Only Sync Links</h3>
-                <p style="margin-bottom: 15px; color: #666; font-size: 13px;">This is how each client actually gets their own data on their own device. For each client below, click "Generate Link" — it filters the current data down to just that person's transactions, uploads it as a separate view-only file in your OneDrive, and gives you a link. Clients don't need a Microsoft account for this. Re-generate a client's link any time their data changes, then send the updated link(s) to your app maintainer to bake in. Requires OneDrive to be connected above first.</p>
+                <h3>👥 Per-Client Data Export</h3>
+                <p style="margin-bottom: 15px; color: #666; font-size: 13px;">This is how each client actually gets their own data on their own device. For each client below, click "Export JSON" — it filters the current data down to just that person's transactions and downloads a small JSON file (also shown as copy-able text). Send that file/text to your app maintainer to publish it in the app's repo — once it's there, that client's login automatically picks it up, no Microsoft account or sign-in needed on their end. Re-export a client's data any time it changes.</p>
                 <div id="clientLinksContainer"></div>
             </div>
 
@@ -1137,15 +1137,19 @@
         return shareUrl + sep + 'download=1';
     }
 
-    // Fetches this client's own read-only file (if configured) and adopts it
-    // as local state. Falls back silently to whatever's already saved
-    // locally if the fetch fails (offline, link not set up yet, CORS, etc.)
-    // so the app still works even before/without this being configured.
+    // Fetches this client's own data file — a small static JSON file
+    // published alongside index.html in the app's own repo, at
+    // clients/<safe-username>.json. Same-origin, so no CORS/auth issues
+    // (unlike trying to fetch anonymously from OneDrive/SharePoint, which
+    // this tenant's sharing policy blocks). Falls back silently to whatever
+    // was already saved locally if the file doesn't exist yet or fails to
+    // load, so the app still works before this is set up.
     async function pullClientReadOnlyData(user, opts) {
         const silent = opts && opts.silent;
-        if (!user || !user.readLink) return false;
+        if (!user) return false;
         try {
-            const res = await fetch(toDirectDownloadUrl(user.readLink));
+            const path = `clients/${cssSafeId(user.username)}.json`;
+            const res = await fetch(path + '?t=' + Date.now()); // cache-bust
             if (!res.ok) throw new Error('HTTP ' + res.status);
             const data = await res.json();
             transactions = Array.isArray(data.transactions) ? data.transactions : [];
@@ -1153,30 +1157,70 @@
             localStorage.setItem('ccTracker', JSON.stringify({ transactions, submissions, transactionId, submissionId }));
             return true;
         } catch (err) {
-            if (!silent) console.warn('Per-client read-only sync failed, using last saved local data instead:', err);
+            if (!silent) console.warn('Per-client data file not found/failed to load, using last saved local data instead:', err);
             return false;
         }
     }
 
-    // Admin-only: renders the "Generate link" row for every client account.
+    // Admin-only: renders an "Export JSON" row for every client account.
     function renderClientLinksPanel() {
         const container = document.getElementById('clientLinksContainer');
         if (!container) return;
         const clients = users.filter(u => u.role !== 'Admin');
         container.innerHTML = clients.map(u => `
-            <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
-                <strong style="min-width:110px;">${u.name}</strong>
-                <button class="btn btn-success" style="padding:8px 14px; font-size:13px;" onclick="generateClientReadLink('${u.username}')">Generate Link</button>
-                <input type="text" id="readLink_${cssSafeId(u.username)}" readonly value="${u.readLink || ''}" placeholder="Not generated yet" onclick="this.select()" style="flex:1; min-width:250px; padding:8px; border:1px solid #ddd; border-radius:5px; font-size:12px;">
+            <div style="margin-bottom:14px;">
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                    <strong style="min-width:110px;">${u.name}</strong>
+                    <button class="btn btn-success" style="padding:8px 14px; font-size:13px;" onclick="exportClientData('${u.username}')">📥 Export JSON</button>
+                    <span style="font-size:12px; color:#666;">expected file: clients/${cssSafeId(u.username)}.json</span>
+                </div>
+                <textarea id="clientJson_${cssSafeId(u.username)}" readonly onclick="this.select()" style="display:none; width:100%; margin-top:6px; height:90px; font-family:monospace; font-size:11px; padding:8px; border:1px solid #ddd; border-radius:5px;"></textarea>
             </div>
         `).join('');
     }
 
-    // Admin-only: filters current data down to one client's own rows,
-    // uploads it as a separate file in Admin's OneDrive, and creates a
-    // VIEW-ONLY anonymous link to it (so the client never gets edit access
-    // and never receives anyone else's data).
-    async function generateClientReadLink(username) {
+    // Admin-only: filters current data down to one client's own rows and
+    // exports it as a JSON file download (and shows it in a copy-able text
+    // box). Send the file/text to your app maintainer to publish at
+    // clients/<safe-username>.json in the repo — no OneDrive step needed.
+    function exportClientData(username) {
+        if (currentUser?.role !== 'Admin') {
+            showAlert('Only Admin can export client data.', 'error');
+            return;
+        }
+        const user = users.find(u => u.username === username);
+        if (!user) return;
+
+        const myName = (user.name || '').trim().toLowerCase();
+        const clientTransactions = transactions.filter(t => (t.name || '').trim().toLowerCase() === myName);
+        const relevantSubmissionIds = new Set(clientTransactions.map(t => t.submissionId).filter(Boolean));
+        const clientSubmissions = submissions.filter(s => relevantSubmissionIds.has(s.id));
+        const payload = JSON.stringify({ transactions: clientTransactions, submissions: clientSubmissions, exportedAt: Date.now() }, null, 2);
+
+        const safeName = cssSafeId(username);
+        const blob = new Blob([payload], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${safeName}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+
+        const output = document.getElementById(`clientJson_${safeName}`);
+        if (output) {
+            output.value = payload;
+            output.style.display = 'block';
+        }
+
+        showAlert(`✓ Exported ${clientTransactions.length} transaction(s) for ${user.name}. Send the downloaded file (or copy the text below) to your app maintainer to publish as clients/${safeName}.json.`, 'success');
+    }
+
+    // (Deprecated OneDrive-anonymous-link approach — kept only so any old
+    // references don't error; this tenant blocks anonymous access so it no
+    // longer runs.)
+    async function generateClientReadLink_unused(username) {
         if (currentUser?.role !== 'Admin') {
             showAlert('Only Admin can generate client sync links.', 'error');
             return;
