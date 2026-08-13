@@ -1,0 +1,9 @@
+[
+  { "username": "admin", "name": "Admin User", "role": "Admin" },
+  { "username": "user1", "name": "User One", "role": "Member" },
+  { "username": "archit@gullak.money", "name": "Archit", "role": "Member" },
+  { "username": "dilip@gullak.money", "name": "Dilip", "role": "Member" },
+  { "username": "manthan@gullak.money", "name": "Manthan", "role": "Member" },
+  { "username": "ajay.kumar@gullak.money", "name": "Ajay Kumar", "role": "Member" },
+  { "username": "naimisha@gullak.money", "name": "Naimisha", "role": "Member" }
+]
