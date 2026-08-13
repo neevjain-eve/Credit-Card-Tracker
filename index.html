@@ -248,6 +248,17 @@
             color: #667eea;
         }
 
+        .drill-card {
+            cursor: pointer;
+            transition: transform 0.1s, box-shadow 0.1s;
+        }
+
+        .drill-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            border-color: #667eea;
+        }
+
         table {
             width: 100%;
             border-collapse: collapse;
@@ -524,7 +535,6 @@
     <div class="nav-tabs">
         <button class="nav-btn active" onclick="switchTab('dashboard')">📊 Dashboard</button>
         <button class="nav-btn admin-only" onclick="switchTab('upload')">📤 Upload Data</button>
-        <button class="nav-btn" onclick="switchTab('statements')">📋 Monthly Statements</button>
         <button class="nav-btn" onclick="switchTab('submissions')">✓ Submission History</button>
     </div>
 
@@ -568,31 +578,13 @@
                 </button>
             </div>
 
-            <!-- Transactions Table -->
+            <!-- Transactions: month-packed drill-down (Month -> Client -> Data) -->
             <h3 style="margin-top: 30px; margin-bottom: 15px;">All Transactions</h3>
             <div class="file-input-wrapper" style="max-width: 400px;">
-                <label>🔍 Filter by name/description</label>
+                <label>🔍 Search all (bypasses month/client browsing)</label>
                 <input type="text" id="dashNameFilter" placeholder="e.g. Amazon or John Doe" oninput="refreshTable()" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:5px;">
             </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Date</th>
-                        <th>Month</th>
-                        <th>Description</th>
-                        <th>Name</th>
-                        <th>Amount (₹)</th>
-                        <th>Type</th>
-                        <th>Status</th>
-                        <th>Bill</th>
-                        <th>Bill Submitted</th>
-                        <th>Action</th>
-                    </tr>
-                </thead>
-                <tbody id="transactionBody">
-                    <tr><td colspan="10" style="text-align: center; padding: 40px; color: #999;">No transactions yet. Go to Upload tab to import data.</td></tr>
-                </tbody>
-            </table>
+            <div id="dashDrillContainer" style="margin-top: 15px;"></div>
         </div>
 
         <!-- Hidden file input reused for attaching a bill to any transaction row -->
@@ -719,78 +711,11 @@
             </div>
         </div>
 
-        <!-- Monthly Statements Tab -->
-        <div id="statements" class="tab-content">
-            <h2>Monthly Statements</h2>
-            <div class="month-year-selector" style="margin-top: 20px;">
-                <select id="stmtMonthFilter" onchange="updateStatements()">
-                    <option value="All">All Months</option>
-                    <option>January</option>
-                    <option>February</option>
-                    <option>March</option>
-                    <option>April</option>
-                    <option>May</option>
-                    <option>June</option>
-                    <option>July</option>
-                    <option>August</option>
-                    <option>September</option>
-                    <option>October</option>
-                    <option>November</option>
-                    <option>December</option>
-                </select>
-                <select id="stmtYearFilter" onchange="updateStatements()">
-                    <option value="All">All Years</option>
-                    <option>2024</option>
-                    <option>2025</option>
-                    <option>2026</option>
-                    <option>2027</option>
-                </select>
-            </div>
-            <div id="statementsContent" style="margin-top: 20px;"></div>
-        </div>
-
         <!-- Submission History Tab -->
         <div id="submissions" class="tab-content">
             <h2>Submission History</h2>
-            <div class="month-year-selector" style="margin-top: 20px;">
-                <select id="subMonthFilter" onchange="updateSubmissions()">
-                    <option value="All">All Months</option>
-                    <option>January</option>
-                    <option>February</option>
-                    <option>March</option>
-                    <option>April</option>
-                    <option>May</option>
-                    <option>June</option>
-                    <option>July</option>
-                    <option>August</option>
-                    <option>September</option>
-                    <option>October</option>
-                    <option>November</option>
-                    <option>December</option>
-                </select>
-                <select id="subYearFilter" onchange="updateSubmissions()">
-                    <option value="All">All Years</option>
-                    <option>2024</option>
-                    <option>2025</option>
-                    <option>2026</option>
-                    <option>2027</option>
-                </select>
-            </div>
-            <table style="margin-top: 20px;">
-                <thead>
-                    <tr>
-                        <th>Submission Date</th>
-                        <th>Month</th>
-                        <th>Count</th>
-                        <th>Total Debit (₹)</th>
-                        <th>Total Credit (₹)</th>
-                        <th>Net Amount (₹)</th>
-                    </tr>
-                </thead>
-                <tbody id="submissionBody">
-                    <tr><td colspan="6" style="text-align: center; padding: 40px; color: #999;">No submissions yet</td></tr>
-                </tbody>
-            </table>
+            <!-- Month-packed drill-down (Month -> Client -> Data) -->
+            <div id="subDrillContainer" style="margin-top: 20px;"></div>
         </div>
     </div>
 </div>
@@ -804,6 +729,18 @@
     let submissionId = 0;
     let selectedFile = null;
     let parsedData = [];
+
+    // Drill-down state for the month-packed Dashboard/Submission History
+    // views: month -> client name -> full data.
+    let dashDrill = { month: null, name: null };
+    let subDrill = { month: null, name: null };
+    const MONTH_ORDER = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    function compareMonthYearDesc(a, b) {
+        const [am, ay] = String(a).split('/');
+        const [bm, by] = String(b).split('/');
+        if (ay !== by) return Number(by) - Number(ay);
+        return MONTH_ORDER.indexOf(bm) - MONTH_ORDER.indexOf(am);
+    }
 
     // Sample users
     // readLink: an optional per-client, VIEW-ONLY OneDrive share link
@@ -1021,8 +958,7 @@
 
                 if (currentUser) {
                     refreshDashboard();
-                    if (document.getElementById('statements')?.classList.contains('active')) updateStatements();
-                    if (document.getElementById('submissions')?.classList.contains('active')) updateSubmissions();
+                    if (document.getElementById('submissions')?.classList.contains('active')) renderSubmissionsDrill();
                 }
             }
         } catch (err) {
@@ -1460,11 +1396,11 @@
         submissions = [];
         transactionId = 0;
         submissionId = 0;
+        dashDrill = { month: null, name: null };
+        subDrill = { month: null, name: null };
         saveData();
         refreshDashboard();
-        if (typeof updateStatements === 'function') updateStatements();
-        if (typeof updateSubmissions === 'function') updateSubmissions();
-        if (typeof refreshTable === 'function') refreshTable();
+        if (typeof renderSubmissionsDrill === 'function') renderSubmissionsDrill();
         showAlert('🗑️ All transactions deleted.', 'success');
     }
 
@@ -1528,6 +1464,8 @@
 
         if (user) {
             currentUser = user;
+            dashDrill = { month: null, name: null };
+            subDrill = { month: null, name: null };
             document.getElementById('loginPage').style.display = 'none';
             document.getElementById('mainApp').style.display = 'flex';
             document.getElementById('currentUser').textContent = `Welcome, ${user.name}`;
@@ -1592,8 +1530,7 @@
         document.getElementById(tabName).classList.add('active');
         event.target.classList.add('active');
 
-        if (tabName === 'statements') updateStatements();
-        if (tabName === 'submissions') updateSubmissions();
+        if (tabName === 'submissions') renderSubmissionsDrill();
     }
 
     // Template Download - Uses pure JS Blob download, NO external library needed.
@@ -1974,42 +1911,149 @@
         refreshTable();
     }
 
-    function refreshTable() {
-        const tbody = document.getElementById('transactionBody');
-        const visible = getVisibleTransactions();
+    // Computes {count, debit, credit} totals for a list of transactions.
+    function computeGroupStats(list) {
+        const debit = list.filter(t => t.type === 'Debit').reduce((sum, t) => sum + t.amount, 0);
+        const credit = list.filter(t => t.type === 'Credit').reduce((sum, t) => sum + t.amount, 0);
+        return { count: list.length, debit, credit };
+    }
 
-        if (visible.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 40px; color: #999;">${transactions.length === 0 ? 'No transactions yet. Go to Upload tab to import data.' : 'No transactions found for your account yet.'}</td></tr>`;
-            return;
+    // Renders a grid of clickable month cards from a list of transactions.
+    function renderMonthCards(list, selectFnName) {
+        const byMonth = {};
+        list.forEach(t => { (byMonth[t.monthYear] = byMonth[t.monthYear] || []).push(t); });
+        const months = Object.keys(byMonth).sort(compareMonthYearDesc);
+        return `<div class="dashboard-grid">${months.map(m => {
+            const stats = computeGroupStats(byMonth[m]);
+            return `
+                <div class="stat-card drill-card" onclick="${selectFnName}('${m}')">
+                    <h3>${m}</h3>
+                    <div class="value" style="font-size:22px;">${stats.count} txn${stats.count === 1 ? '' : 's'}</div>
+                    <div style="font-size:12px; color:#666; margin-top:6px;">Dr ₹${stats.debit.toFixed(2)} · Cr ₹${stats.credit.toFixed(2)}</div>
+                </div>
+            `;
+        }).join('')}</div>`;
+    }
+
+    // Renders a grid of clickable client-name cards from a list of
+    // transactions (used inside a single month).
+    function renderNameCards(list, selectFnName) {
+        const byName = {};
+        list.forEach(t => { const n = t.name || 'Unassigned'; (byName[n] = byName[n] || []).push(t); });
+        const names = Object.keys(byName).sort();
+        return `<div class="dashboard-grid">${names.map(n => {
+            const stats = computeGroupStats(byName[n]);
+            return `
+                <div class="stat-card drill-card" onclick="${selectFnName}('${n.replace(/'/g, "\\'")}')">
+                    <h3>${n}</h3>
+                    <div class="value" style="font-size:22px;">${stats.count} txn${stats.count === 1 ? '' : 's'}</div>
+                    <div style="font-size:12px; color:#666; margin-top:6px;">Dr ₹${stats.debit.toFixed(2)} · Cr ₹${stats.credit.toFixed(2)}</div>
+                </div>
+            `;
+        }).join('')}</div>`;
+    }
+
+    // Renders a row of "back" breadcrumb buttons above a drilled-down view.
+    function renderBreadcrumb(items) {
+        return `<div style="margin-bottom:15px; display:flex; gap:10px; flex-wrap:wrap;">
+            ${items.map(i => `<button class="btn" style="background:#e9ecef; padding:6px 14px; font-size:13px;" onclick="${i.fn}">${i.label}</button>`).join('')}
+        </div>`;
+    }
+
+    // Renders the full transaction table (leaf level of the drill-down, or
+    // the flat search-results view).
+    function renderTransactionTable(list) {
+        if (list.length === 0) {
+            return '<p style="text-align:center; padding:40px; color:#999;">No transactions found.</p>';
         }
+        return `
+            <table>
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Month</th>
+                        <th>Description</th>
+                        <th>Name</th>
+                        <th>Amount (₹)</th>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Bill</th>
+                        <th>Bill Submitted</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${list.map(t => `
+                        <tr>
+                            <td>${t.date}</td>
+                            <td><strong>${t.monthYear}</strong></td>
+                            <td>${t.transaction}</td>
+                            <td>${t.name || '-'}</td>
+                            <td>₹${t.amount.toFixed(2)}</td>
+                            <td><span class="status-badge ${t.type === 'Debit' ? 'debit' : 'credit'}">${t.type}</span></td>
+                            <td><span class="status-badge ${t.status === 'Pending' ? 'pending' : 'submitted'}">${t.status}</span></td>
+                            <td>${billCellHtml(t)}</td>
+                            <td>${billSubmittedCellHtml(t)}</td>
+                            <td>${currentUser?.role === 'Admin' ? `<button class="btn btn-danger" onclick="deleteTransaction(${t.id})" style="padding: 5px 10px; font-size: 12px;">Delete</button>` : '-'}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+    }
 
+    // Dashboard drill-down handlers
+    function dashSelectMonth(m) { dashDrill.month = m; dashDrill.name = null; refreshTable(); }
+    function dashSelectName(n) { dashDrill.name = n; refreshTable(); }
+    function dashBackToMonths() { dashDrill = { month: null, name: null }; refreshTable(); }
+    function dashBackToNames() { dashDrill.name = null; refreshTable(); }
+
+    // Dashboard: month-packed drill-down (Month -> Client -> Data), with a
+    // free-text search box that bypasses drilling and shows flat results.
+    function refreshTable() {
+        const container = document.getElementById('dashDrillContainer');
+        if (!container) return;
+
+        const visible = getVisibleTransactions();
         const nameFilter = (document.getElementById('dashNameFilter')?.value || '').trim().toLowerCase();
-        const filteredTransactions = nameFilter
-            ? visible.filter(t =>
+
+        if (nameFilter) {
+            const filtered = visible.filter(t =>
                 t.transaction.toLowerCase().includes(nameFilter) ||
                 (t.name || '').toLowerCase().includes(nameFilter)
-              )
-            : visible;
-
-        if (filteredTransactions.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 40px; color: #999;">No transactions match that filter</td></tr>';
+            );
+            container.innerHTML = filtered.length
+                ? renderTransactionTable(filtered)
+                : '<p style="text-align:center; padding:40px; color:#999;">No transactions match that filter</p>';
             return;
         }
 
-        tbody.innerHTML = filteredTransactions.map(t => `
-            <tr>
-                <td>${t.date}</td>
-                <td><strong>${t.monthYear}</strong></td>
-                <td>${t.transaction}</td>
-                <td>${t.name || '-'}</td>
-                <td>₹${t.amount.toFixed(2)}</td>
-                <td><span class="status-badge ${t.type === 'Debit' ? 'debit' : 'credit'}">${t.type}</span></td>
-                <td><span class="status-badge ${t.status === 'Pending' ? 'pending' : 'submitted'}">${t.status}</span></td>
-                <td>${billCellHtml(t)}</td>
-                <td>${billSubmittedCellHtml(t)}</td>
-                <td>${currentUser?.role === 'Admin' ? `<button class="btn btn-danger" onclick="deleteTransaction(${t.id})" style="padding: 5px 10px; font-size: 12px;">Delete</button>` : '-'}</td>
-            </tr>
-        `).join('');
+        if (visible.length === 0) {
+            container.innerHTML = `<p style="text-align:center; padding:40px; color:#999;">${transactions.length === 0 ? 'No transactions yet. Go to Upload tab to import data.' : 'No transactions found for your account yet.'}</p>`;
+            return;
+        }
+
+        if (!dashDrill.month) {
+            container.innerHTML = renderMonthCards(visible, 'dashSelectMonth');
+            return;
+        }
+
+        const monthTx = visible.filter(t => t.monthYear === dashDrill.month);
+
+        if (!dashDrill.name) {
+            container.innerHTML =
+                renderBreadcrumb([{ label: '← All Months', fn: 'dashBackToMonths()' }]) +
+                renderNameCards(monthTx, 'dashSelectName');
+            return;
+        }
+
+        const nameTx = monthTx.filter(t => (t.name || 'Unassigned') === dashDrill.name);
+        container.innerHTML =
+            renderBreadcrumb([
+                { label: '← All Months', fn: 'dashBackToMonths()' },
+                { label: `← ${dashDrill.month}`, fn: 'dashBackToNames()' }
+            ]) +
+            renderTransactionTable(nameTx);
     }
 
     // Renders the "Bill" column: an Attach button if no bill yet,
@@ -2168,129 +2212,135 @@
         console.log('Submitted:', pending.length, 'for month:', month);
     }
 
-    // Statements
-    function updateStatements() {
-        const monthFilter = document.getElementById('stmtMonthFilter')?.value || 'All';
-        const yearFilter = document.getElementById('stmtYearFilter')?.value || 'All';
-
-        const filtered = getVisibleTransactions().filter(t => {
-            if (monthFilter !== 'All' && t.month !== monthFilter) return false;
-            if (yearFilter !== 'All' && String(t.year) !== String(yearFilter)) return false;
-            return true;
+    // Builds one row per (month, client name, submission) combination from
+    // the underlying transactions, so mixed-month submissions still break
+    // down correctly under the right month card.
+    function buildSubmissionRows() {
+        const visible = getVisibleTransactions().filter(t => t.submissionId);
+        const groups = {};
+        visible.forEach(t => {
+            const name = t.name || 'Unassigned';
+            const key = `${t.monthYear}||${name}||${t.submissionId}`;
+            if (!groups[key]) {
+                const sub = submissions.find(s => s.id === t.submissionId);
+                groups[key] = { date: sub ? sub.date : '-', month: t.monthYear, name, count: 0, debit: 0, credit: 0 };
+            }
+            groups[key].count++;
+            if (t.type === 'Debit') groups[key].debit += t.amount;
+            else groups[key].credit += t.amount;
         });
-
-        const byMonth = {};
-        filtered.forEach(t => {
-            if (!byMonth[t.monthYear]) byMonth[t.monthYear] = [];
-            byMonth[t.monthYear].push(t);
-        });
-
-        let html = '';
-        Object.entries(byMonth).sort().reverse().forEach(([month, trans]) => {
-            const debit = trans.filter(t => t.type === 'Debit').reduce((sum, t) => sum + t.amount, 0);
-            const credit = trans.filter(t => t.type === 'Credit').reduce((sum, t) => sum + t.amount, 0);
-
-            html += `
-                <div style="margin-bottom: 30px; border: 1px solid #e9ecef; border-radius: 8px; overflow: hidden;">
-                    <div style="background: #f8f9fa; padding: 15px; font-weight: bold;">
-                        ${month} - Total Debit: ₹${debit.toFixed(2)} | Total Credit: ₹${credit.toFixed(2)}
-                    </div>
-                    <table style="margin: 0; box-shadow: none;">
-                        <thead>
-                            <tr>
-                                <th>Date</th>
-                                <th>Description</th>
-                                <th>Name</th>
-                                <th>Amount (₹)</th>
-                                <th>Type</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${trans.map(t => `
-                                <tr>
-                                    <td>${t.date}</td>
-                                    <td>${t.transaction}</td>
-                                    <td>${t.name || '-'}</td>
-                                    <td>${t.amount.toFixed(2)}</td>
-                                    <td><span class="status-badge ${t.type === 'Debit' ? 'debit' : 'credit'}">${t.type}</span></td>
-                                    <td><span class="status-badge ${t.status === 'Pending' ? 'pending' : 'submitted'}">${t.status}</span></td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                </div>
-            `;
-        });
-
-        document.getElementById('statementsContent').innerHTML = html || '<p style="color: #999;">No data for the selected filter</p>';
+        return Object.values(groups).map(g => ({ ...g, net: g.debit - g.credit }));
     }
 
-    // Submissions
-    function updateSubmissions() {
-        const tbody = document.getElementById('submissionBody');
-        const monthFilter = document.getElementById('subMonthFilter')?.value || 'All';
-        const yearFilter = document.getElementById('subYearFilter')?.value || 'All';
+    function renderSubMonthCards(rows) {
+        const byMonth = {};
+        rows.forEach(r => { (byMonth[r.month] = byMonth[r.month] || []).push(r); });
+        const months = Object.keys(byMonth).sort(compareMonthYearDesc);
+        return `<div class="dashboard-grid">${months.map(m => {
+            const list = byMonth[m];
+            const count = list.reduce((s, r) => s + r.count, 0);
+            const debit = list.reduce((s, r) => s + r.debit, 0);
+            const credit = list.reduce((s, r) => s + r.credit, 0);
+            return `
+                <div class="stat-card drill-card" onclick="subSelectMonth('${m}')">
+                    <h3>${m}</h3>
+                    <div class="value" style="font-size:22px;">${count} txn${count === 1 ? '' : 's'}</div>
+                    <div style="font-size:12px; color:#666; margin-top:6px;">Dr ₹${debit.toFixed(2)} · Cr ₹${credit.toFixed(2)}</div>
+                </div>
+            `;
+        }).join('')}</div>`;
+    }
 
-        // Admins see every submission as a whole. Everyone else only sees the
-        // slice of each submission that belongs to their own transactions —
-        // a submission that bundled several people's spend gets recomputed
-        // down to just this user's date/month/count/totals.
-        let rows;
-        if (currentUser?.role === 'Admin') {
-            rows = submissions.map(s => ({
-                date: s.date,
-                month: s.month,
-                count: s.transactionCount,
-                debit: s.totalDebit,
-                credit: s.totalCredit,
-                net: s.netAmount
-            }));
-        } else {
-            const myTransactions = getVisibleTransactions().filter(t => t.submissionId);
-            const bySubmission = {};
-            myTransactions.forEach(t => {
-                if (!bySubmission[t.submissionId]) bySubmission[t.submissionId] = [];
-                bySubmission[t.submissionId].push(t);
-            });
-            rows = Object.entries(bySubmission).map(([subId, trans]) => {
-                const sub = submissions.find(s => s.id === Number(subId));
-                const debit = trans.filter(t => t.type === 'Debit').reduce((sum, t) => sum + t.amount, 0);
-                const credit = trans.filter(t => t.type === 'Credit').reduce((sum, t) => sum + t.amount, 0);
-                return {
-                    date: sub ? sub.date : '-',
-                    month: trans[0].monthYear,
-                    count: trans.length,
-                    debit: debit,
-                    credit: credit,
-                    net: debit - credit
-                };
-            });
+    function renderSubNameCards(rows) {
+        const byName = {};
+        rows.forEach(r => { (byName[r.name] = byName[r.name] || []).push(r); });
+        const names = Object.keys(byName).sort();
+        return `<div class="dashboard-grid">${names.map(n => {
+            const list = byName[n];
+            const count = list.reduce((s, r) => s + r.count, 0);
+            const debit = list.reduce((s, r) => s + r.debit, 0);
+            const credit = list.reduce((s, r) => s + r.credit, 0);
+            return `
+                <div class="stat-card drill-card" onclick="subSelectName('${n.replace(/'/g, "\\'")}')">
+                    <h3>${n}</h3>
+                    <div class="value" style="font-size:22px;">${count} txn${count === 1 ? '' : 's'}</div>
+                    <div style="font-size:12px; color:#666; margin-top:6px;">Dr ₹${debit.toFixed(2)} · Cr ₹${credit.toFixed(2)}</div>
+                </div>
+            `;
+        }).join('')}</div>`;
+    }
+
+    function renderSubmissionTable(rows) {
+        if (rows.length === 0) {
+            return '<p style="text-align:center; padding:40px; color:#999;">No submissions found.</p>';
         }
+        return `
+            <table>
+                <thead>
+                    <tr>
+                        <th>Submission Date</th>
+                        <th>Month</th>
+                        <th>Count</th>
+                        <th>Total Debit (₹)</th>
+                        <th>Total Credit (₹)</th>
+                        <th>Net Amount (₹)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows.sort((a, b) => new Date(b.date) - new Date(a.date)).map(r => `
+                        <tr>
+                            <td>${r.date}</td>
+                            <td>${r.month}</td>
+                            <td>${r.count}</td>
+                            <td>₹${r.debit.toFixed(2)}</td>
+                            <td>₹${r.credit.toFixed(2)}</td>
+                            <td>₹${r.net.toFixed(2)}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+    }
 
-        // submission.month is stored like "August/2025"
-        const filtered = rows.filter(r => {
-            const [subMonth, subYear] = String(r.month || '').split('/');
-            if (monthFilter !== 'All' && subMonth !== monthFilter) return false;
-            if (yearFilter !== 'All' && String(subYear) !== String(yearFilter)) return false;
-            return true;
-        });
+    // Submission History drill-down handlers
+    function subSelectMonth(m) { subDrill.month = m; subDrill.name = null; renderSubmissionsDrill(); }
+    function subSelectName(n) { subDrill.name = n; renderSubmissionsDrill(); }
+    function subBackToMonths() { subDrill = { month: null, name: null }; renderSubmissionsDrill(); }
+    function subBackToNames() { subDrill.name = null; renderSubmissionsDrill(); }
 
-        if (filtered.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 40px; color: #999;">${submissions.length === 0 ? 'No submissions yet' : 'No submissions for the selected filter'}</td></tr>`;
+    // Submission History: month-packed drill-down (Month -> Client -> Data).
+    function renderSubmissionsDrill() {
+        const container = document.getElementById('subDrillContainer');
+        if (!container) return;
+
+        const rows = buildSubmissionRows();
+
+        if (rows.length === 0) {
+            container.innerHTML = `<p style="text-align:center; padding:40px; color:#999;">${submissions.length === 0 ? 'No submissions yet' : 'No submissions found for your account yet.'}</p>`;
             return;
         }
 
-        tbody.innerHTML = filtered.sort((a, b) => new Date(b.date) - new Date(a.date)).map(r => `
-            <tr>
-                <td>${r.date}</td>
-                <td>${r.month}</td>
-                <td>${r.count}</td>
-                <td>₹${r.debit.toFixed(2)}</td>
-                <td>₹${r.credit.toFixed(2)}</td>
-                <td>₹${r.net.toFixed(2)}</td>
-            </tr>
-        `).join('');
+        if (!subDrill.month) {
+            container.innerHTML = renderSubMonthCards(rows);
+            return;
+        }
+
+        const monthRows = rows.filter(r => r.month === subDrill.month);
+
+        if (!subDrill.name) {
+            container.innerHTML =
+                renderBreadcrumb([{ label: '← All Months', fn: 'subBackToMonths()' }]) +
+                renderSubNameCards(monthRows);
+            return;
+        }
+
+        const nameRows = monthRows.filter(r => r.name === subDrill.name);
+        container.innerHTML =
+            renderBreadcrumb([
+                { label: '← All Months', fn: 'subBackToMonths()' },
+                { label: `← ${subDrill.month}`, fn: 'subBackToNames()' }
+            ]) +
+            renderSubmissionTable(nameRows);
     }
 
     // Start app
