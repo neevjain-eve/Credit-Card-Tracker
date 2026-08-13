@@ -649,6 +649,13 @@
                 <div id="clientLinksContainer"></div>
             </div>
 
+            <!-- Danger Zone (Admin only) -->
+            <div class="upload-section" style="background:#fef2f2; border-color:#fecaca;">
+                <h3>⚠️ Danger Zone</h3>
+                <p style="margin-bottom: 15px; color: #666; font-size: 13px;">Permanently deletes every transaction and submission for every client from this app. This also republishes empty files to GitHub for all clients (if Auto-Publish is configured). This cannot be undone.</p>
+                <button class="btn btn-danger" onclick="deleteAllTransactions()">🗑️ Delete All Transactions</button>
+            </div>
+
             <!-- Template Download -->
             <div class="template-section">
                 <h3>📥 Step 1: Download Template</h3>
@@ -1429,6 +1436,36 @@
         if (oneDriveConfig.clientId) {
             try { initMsal(); } catch (err) { console.warn('MSAL pre-init skipped:', err); }
         }
+    }
+
+    // Admin-only: wipes every transaction and submission, then republishes
+    // (empty) client files so GitHub reflects the reset too.
+    function deleteAllTransactions() {
+        if (currentUser?.role !== 'Admin') {
+            showAlert('Only Admin can delete all transactions.', 'error');
+            return;
+        }
+        const count = transactions.length;
+        if (count === 0) {
+            showAlert('There are no transactions to delete.', 'info');
+            return;
+        }
+        const confirmed = confirm(`This will permanently delete all ${count} transaction(s) and all submissions, for every client. This cannot be undone. Continue?`);
+        if (!confirmed) return;
+        // Second confirmation for a destructive, irreversible, all-client action.
+        const doubleConfirmed = confirm('Are you absolutely sure? Type OK to permanently delete everything.');
+        if (!doubleConfirmed) return;
+
+        transactions = [];
+        submissions = [];
+        transactionId = 0;
+        submissionId = 0;
+        saveData();
+        refreshDashboard();
+        if (typeof updateStatements === 'function') updateStatements();
+        if (typeof updateSubmissions === 'function') updateSubmissions();
+        if (typeof refreshTable === 'function') refreshTable();
+        showAlert('🗑️ All transactions deleted.', 'success');
     }
 
     // LocalStorage
