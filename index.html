@@ -993,9 +993,18 @@
         }
     }
 
+    // NOTE: this used to run pullFromOneDrive() on a recurring 20s timer.
+    // That caused a real data-corruption bug: if ANY other open Admin
+    // browser tab/session still had stale local data (e.g. from before a
+    // fix, or simply not yet refreshed), its own periodic push would
+    // silently overwrite the shared OneDrive file, and every other open
+    // tab's next 20s poll would then pull that stale data back down —
+    // producing a visible "glitching between correct and old data" loop
+    // across all connected sessions. Auto-pull now only runs once, right
+    // when OneDrive is (re)connected, not on a recurring timer. Admin can
+    // still manually pull via a fresh Connect OneDrive if ever needed.
     function startOneDriveAutoSync() {
-        if (oneDriveSyncTimer) clearInterval(oneDriveSyncTimer);
-        oneDriveSyncTimer = setInterval(() => pullFromOneDrive({ silent: true }), ONEDRIVE_SYNC_POLL_MS);
+        if (oneDriveSyncTimer) { clearInterval(oneDriveSyncTimer); oneDriveSyncTimer = null; }
     }
 
     // On login, if this browser already has a cached Microsoft session
