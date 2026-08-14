@@ -1363,6 +1363,29 @@
         console.log('XLSX library loaded:', typeof XLSX !== 'undefined');
         console.log('MSAL library loaded:', typeof msal !== 'undefined');
 
+        // Default the Upload tab's Month/Year selectors to the ACTUAL
+        // current month/year, not a hardcoded value baked into the HTML —
+        // a stale hardcoded default (e.g. always "August 2025") is exactly
+        // what caused transactions to get mis-tagged before. This keeps it
+        // correct automatically every month without needing another manual
+        // fix like this one.
+        const uploadMonthEl = document.getElementById('uploadMonth');
+        const uploadYearEl = document.getElementById('uploadYear');
+        if (uploadMonthEl && uploadYearEl) {
+            const now = new Date();
+            const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+            const currentMonthName = monthNames[now.getMonth()];
+            const currentYear = String(now.getFullYear());
+            if ([...uploadMonthEl.options].some(o => o.value === currentMonthName)) uploadMonthEl.value = currentMonthName;
+            // If the current year isn't in the dropdown yet, add it so it's still selectable.
+            if (![...uploadYearEl.options].some(o => o.value === currentYear)) {
+                const opt = document.createElement('option');
+                opt.value = currentYear; opt.textContent = currentYear;
+                uploadYearEl.appendChild(opt);
+            }
+            uploadYearEl.value = currentYear;
+        }
+
         const clientIdInput = document.getElementById('odClientIdInput');
         const shareLinkInput = document.getElementById('odShareLinkInput');
         if (clientIdInput) clientIdInput.value = oneDriveConfig.clientId || '';
