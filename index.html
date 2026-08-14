@@ -578,6 +578,9 @@
                 <input type="text" id="dashNameFilter" placeholder="e.g. Amazon or John Doe" oninput="refreshTable()" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:5px;">
             </div>
             <div id="dashDrillContainer" style="margin-top: 15px;"></div>
+            <!-- Stable slot (never wiped by refreshTable's re-renders) that
+                 the upload widget gets moved into when importing inline. -->
+            <div id="inlineImportSlot" style="margin-top: 20px;"></div>
         </div>
 
         <!-- Hidden file input reused for attaching a bill to any transaction row -->
@@ -655,6 +658,12 @@
                 <p style="margin-top: 10px; font-size: 12px;">Columns: <strong>Date, Transaction, Amount, Dr/Cr, Name</strong> — e.g. <code>2026-08-01, Amazon Purchase, 5000, Dr, John Doe</code>. The <strong>Name</strong> column maps each transaction to the person it belongs to.</p>
             </div>
 
+            <!-- This whole widget (file picker + preview) can be temporarily
+                 relocated into the Dashboard by toggleInlineImport(), so it
+                 can be filled out without leaving Dashboard. uploadWidgetAnchor
+                 marks where it belongs when it's not inline. -->
+            <div id="uploadWidgetAnchor"></div>
+            <div id="uploadWidget">
             <!-- File Upload -->
             <div class="upload-section">
                 <h3>📤 Step 2: Upload Your File</h3>
@@ -705,6 +714,7 @@
                     <button class="btn btn-success" onclick="importConfirmed()">✓ Confirm & Import</button>
                     <button class="btn btn-danger" onclick="cancelImport()">✕ Cancel</button>
                 </div>
+            </div>
             </div>
         </div>
 
@@ -1556,6 +1566,7 @@
             currentUser = user;
             dashDrill = { month: null, name: null };
             subDrill = { month: null, name: null };
+            if (typeof restoreUploadWidgetToTab === 'function') restoreUploadWidgetToTab();
             document.getElementById('loginPage').style.display = 'none';
             document.getElementById('mainApp').style.display = 'flex';
             document.getElementById('currentUser').textContent = `Welcome, ${user.name}`;
@@ -1621,6 +1632,7 @@
         event.target.classList.add('active');
 
         if (tabName === 'submissions') renderSubmissionsDrill();
+        if (tabName === 'upload' && typeof restoreUploadWidgetToTab === 'function') restoreUploadWidgetToTab();
     }
 
     // Template Download - Uses pure JS Blob download, NO external library needed.
@@ -2091,16 +2103,20 @@
     function dashBackToMonths() { dashDrill = { month: null, name: null }; refreshTable(); }
     function dashBackToNames() { dashDrill.name = null; refreshTable(); }
 
-    // Jumps to the Upload Data tab with the Month/Year selectors pre-filled
-    // to match whichever month card the user was browsing, so importing
-    // more transactions for that month doesn't require re-picking it.
-    function goToImportForMonth(monthYear) {
-        document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-        const uploadTab = document.getElementById('upload');
-        if (uploadTab) uploadTab.classList.add('active');
-        const uploadNavBtn = Array.from(document.querySelectorAll('.nav-btn')).find(b => b.textContent.includes('Upload'));
-        if (uploadNavBtn) uploadNavBtn.classList.add('active');
+    // Moves the actual file-upload/preview widget (normally living in the
+    // Upload Data tab) into a stable slot on the Dashboard, so transactions
+    // can be imported right there without switching tabs. The widget keeps
+    // all its existing behavior (parseAndPreviewFile, importConfirmed, etc.)
+    // since it's the same DOM node/element IDs, just relocated. It moves
+    // back to its normal spot (uploadWidgetAnchor) whenever the Upload Data
+    // tab is opened via the nav bar, so that tab is never left empty.
+    function toggleInlineImport(monthYear) {
+        if (currentUser?.role !== 'Admin') return;
+        const slot = document.getElementById('inlineImportSlot');
+        const widget = document.getElementById('uploadWidget');
+        if (!slot || !widget) return;
+
+        slot.appendChild(widget); // no-op if already there
 
         const [monthName, yearVal] = String(monthYear).split('/');
         const monthEl = document.getElementById('uploadMonth');
@@ -2114,15 +2130,25 @@
             }
             yearEl.value = yearVal;
         }
-        if (uploadTab) uploadTab.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        widget.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
-    // Same jump as goToImportForMonth, but defaults to today's actual
-    // month/year — used by the top-level (no month selected yet) Import button.
-    function goToImportForCurrentMonth() {
+    // Same as toggleInlineImport, but defaults to today's actual month/year
+    // — used by the top-level (no month selected yet) Import button.
+    function toggleInlineImportForCurrentMonth() {
         const now = new Date();
         const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-        goToImportForMonth(`${monthNames[now.getMonth()]}/${now.getFullYear()}`);
+        toggleInlineImport(`${monthNames[now.getMonth()]}/${now.getFullYear()}`);
+    }
+
+    // Moves the upload widget back to its normal home in the Upload Data
+    // tab (used when that tab is opened directly via the nav bar).
+    function restoreUploadWidgetToTab() {
+        const anchor = document.getElementById('uploadWidgetAnchor');
+        const widget = document.getElementById('uploadWidget');
+        if (anchor && widget && widget.parentElement !== anchor.parentElement) {
+            anchor.parentElement.insertBefore(widget, anchor.nextSibling);
+        }
     }
 
     // Dashboard: month-packed drill-down (Month -> Client -> Data), with a
@@ -2150,19 +2176,24 @@
             return;
         }
 
+        const importBtnHtml = currentUser?.role === 'Admin'
+            ? `<div id="inlineImportBtnSlot" style="margin-bottom:15px;"><button class="btn btn-success" onclick="toggleInlineImportForCurrentMonth()">📥 Import Transactions</button></div>`
+            : '';
+
         if (!dashDrill.month) {
-            container.innerHTML =
-                `<div style="margin-bottom:15px;"><button class="btn btn-success" onclick="goToImportForCurrentMonth()">📥 Import Transactions</button></div>` +
-                renderMonthCards(visible, 'dashSelectMonth');
+            container.innerHTML = importBtnHtml + renderMonthCards(visible, 'dashSelectMonth');
             return;
         }
 
         const monthTx = visible.filter(t => t.monthYear === dashDrill.month);
 
         if (!dashDrill.name) {
+            const monthImportBtnHtml = currentUser?.role === 'Admin'
+                ? `<div id="inlineImportBtnSlot" style="margin-bottom:15px;"><button class="btn btn-success" onclick="toggleInlineImport('${dashDrill.month}')">📥 Import Transactions for ${dashDrill.month}</button></div>`
+                : '';
             container.innerHTML =
                 renderBreadcrumb([{ label: '← All Months', fn: 'dashBackToMonths()' }]) +
-                `<div style="margin-bottom:15px;"><button class="btn btn-success" onclick="goToImportForMonth('${dashDrill.month}')">📥 Import Transactions for ${dashDrill.month}</button></div>` +
+                monthImportBtnHtml +
                 renderNameCards(monthTx, 'dashSelectName');
             return;
         }
