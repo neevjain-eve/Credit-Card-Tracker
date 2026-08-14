@@ -639,6 +639,8 @@
                 <h3>⚠️ Danger Zone</h3>
                 <p style="margin-bottom: 15px; color: #666; font-size: 13px;">Marked everything as submitted by mistake? This resets every transaction back to Pending and clears all submission records, without deleting any transaction data. Also re-syncs the corrected state to OneDrive and GitHub.</p>
                 <button class="btn btn-danger" onclick="revertAllSubmissions()">↩️ Revert All Submissions (back to Pending)</button>
+                <p style="margin: 15px 0 15px; color: #666; font-size: 13px;">Relabels every transaction's Month/Year to August 2026 (the actual day-of-month on each transaction is kept as-is — only the Month/Year grouping changes), so everything shows under one August/2026 card instead of split across May/June.</p>
+                <button class="btn btn-danger" onclick="relabelAllToAugust2026()">📅 Relabel All Transactions to August/2026</button>
                 <p style="margin: 15px 0 15px; color: #666; font-size: 13px;">Permanently deletes every transaction and submission for every client from this app. This also republishes empty files to GitHub for all clients (if Auto-Publish is configured). This cannot be undone.</p>
                 <button class="btn btn-danger" onclick="deleteAllTransactions()">🗑️ Delete All Transactions</button>
             </div>
@@ -1406,6 +1408,37 @@
         refreshDashboard();
         if (typeof renderSubmissionsDrill === 'function') renderSubmissionsDrill();
         showAlert('↩️ All submissions reverted — everything is back to Pending.', 'success');
+    }
+
+    // Admin-only: relabels every transaction's Month/Year grouping to
+    // August 2026, without touching the underlying day-of-month in `date`.
+    // Existing submissions keep their own `month` field as originally
+    // recorded (submission history is a point-in-time record), but the
+    // transactions themselves — and therefore Dashboard's month cards —
+    // move to a single August/2026 bucket.
+    function relabelAllToAugust2026() {
+        if (currentUser?.role !== 'Admin') {
+            showAlert('Only Admin can relabel transactions.', 'error');
+            return;
+        }
+        if (transactions.length === 0) {
+            showAlert('There are no transactions to relabel.', 'info');
+            return;
+        }
+        const confirmed = confirm(`This will relabel all ${transactions.length} transaction(s) to Month/Year "August/2026" (their actual day-of-month is kept). Continue?`);
+        if (!confirmed) return;
+
+        transactions.forEach(t => {
+            t.month = 'August';
+            t.year = '2026';
+            t.monthYear = 'August/2026';
+        });
+        dashDrill = { month: null, name: null };
+        subDrill = { month: null, name: null };
+        saveData();
+        refreshDashboard();
+        if (typeof renderSubmissionsDrill === 'function') renderSubmissionsDrill();
+        showAlert('📅 All transactions relabeled to August/2026.', 'success');
     }
 
     // Admin-only: wipes every transaction and submission, then republishes
@@ -2263,7 +2296,10 @@
             const key = `${t.monthYear}||${name}||${t.submissionId}`;
             if (!groups[key]) {
                 const sub = submissions.find(s => s.id === t.submissionId);
-                groups[key] = { date: sub ? sub.date : '-', month: t.monthYear, name, count: 0, debit: 0, credit: 0 };
+                // Submissions are created one-per-transaction now, so each
+                // group maps to exactly one transaction — keep a reference
+                // to it so the bill can be shown right in this row.
+                groups[key] = { date: sub ? sub.date : '-', month: t.monthYear, name, count: 0, debit: 0, credit: 0, transactionId: t.id, description: t.transaction, billData: t.billData, billFileName: t.billFileName };
             }
             groups[key].count++;
             if (t.type === 'Debit') groups[key].debit += t.amount;
@@ -2320,10 +2356,12 @@
                     <tr>
                         <th>Submission Date</th>
                         <th>Month</th>
+                        <th>Description</th>
                         <th>Count</th>
                         <th>Total Debit (₹)</th>
                         <th>Total Credit (₹)</th>
                         <th>Net Amount (₹)</th>
+                        <th>Bill</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -2331,10 +2369,12 @@
                         <tr>
                             <td>${r.date}</td>
                             <td>${r.month}</td>
+                            <td>${r.description || '-'}</td>
                             <td>${r.count}</td>
                             <td>₹${r.debit.toFixed(2)}</td>
                             <td>₹${r.credit.toFixed(2)}</td>
                             <td>₹${r.net.toFixed(2)}</td>
+                            <td>${r.billData ? `<button class="btn btn-primary" style="padding:5px 10px; font-size:12px;" onclick="viewBill(${r.transactionId})">📎 View</button>` : '-'}</td>
                         </tr>
                     `).join('')}
                 </tbody>
