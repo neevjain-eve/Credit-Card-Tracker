@@ -644,7 +644,9 @@
             <!-- Danger Zone (Admin only) -->
             <div class="upload-section" style="background:#fef2f2; border-color:#fecaca;">
                 <h3>⚠️ Danger Zone</h3>
-                <p style="margin-bottom: 15px; color: #666; font-size: 13px;">Permanently deletes every transaction and submission for every client from this app. This also republishes empty files to GitHub for all clients (if Auto-Publish is configured). This cannot be undone.</p>
+                <p style="margin-bottom: 15px; color: #666; font-size: 13px;">Marked everything as submitted by mistake? This resets every transaction back to Pending and clears all submission records, without deleting any transaction data. Also re-syncs the corrected state to OneDrive and GitHub.</p>
+                <button class="btn btn-danger" onclick="revertAllSubmissions()">↩️ Revert All Submissions (back to Pending)</button>
+                <p style="margin: 15px 0 15px; color: #666; font-size: 13px;">Permanently deletes every transaction and submission for every client from this app. This also republishes empty files to GitHub for all clients (if Auto-Publish is configured). This cannot be undone.</p>
                 <button class="btn btn-danger" onclick="deleteAllTransactions()">🗑️ Delete All Transactions</button>
             </div>
 
@@ -1381,6 +1383,36 @@
         if (oneDriveConfig.clientId) {
             try { initMsal(); } catch (err) { console.warn('MSAL pre-init skipped:', err); }
         }
+    }
+
+    // Admin-only: resets every transaction back to Pending and clears all
+    // submission records, WITHOUT deleting transaction data. Useful for
+    // undoing an accidental "Submit All Pending" (e.g. clicked too early,
+    // or during testing). Re-syncs the corrected state to OneDrive/GitHub.
+    function revertAllSubmissions() {
+        if (currentUser?.role !== 'Admin') {
+            showAlert('Only Admin can revert submissions.', 'error');
+            return;
+        }
+        const submittedCount = transactions.filter(t => t.status === 'Submitted').length;
+        if (submittedCount === 0 && submissions.length === 0) {
+            showAlert('There is nothing submitted to revert.', 'info');
+            return;
+        }
+        const confirmed = confirm(`This will mark all ${submittedCount} submitted transaction(s) back to Pending and remove ${submissions.length} submission record(s). Transaction data itself is kept. Continue?`);
+        if (!confirmed) return;
+
+        transactions.forEach(t => {
+            t.status = 'Pending';
+            delete t.submissionId;
+        });
+        submissions = [];
+        dashDrill = { month: null, name: null };
+        subDrill = { month: null, name: null };
+        saveData();
+        refreshDashboard();
+        if (typeof renderSubmissionsDrill === 'function') renderSubmissionsDrill();
+        showAlert('↩️ All submissions reverted — everything is back to Pending.', 'success');
     }
 
     // Admin-only: wipes every transaction and submission, then republishes
