@@ -2117,6 +2117,14 @@
         if (uploadTab) uploadTab.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
+    // Same jump as goToImportForMonth, but defaults to today's actual
+    // month/year — used by the top-level (no month selected yet) Import button.
+    function goToImportForCurrentMonth() {
+        const now = new Date();
+        const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+        goToImportForMonth(`${monthNames[now.getMonth()]}/${now.getFullYear()}`);
+    }
+
     // Dashboard: month-packed drill-down (Month -> Client -> Data), with a
     // free-text search box that bypasses drilling and shows flat results.
     function refreshTable() {
@@ -2143,7 +2151,9 @@
         }
 
         if (!dashDrill.month) {
-            container.innerHTML = renderMonthCards(visible, 'dashSelectMonth');
+            container.innerHTML =
+                `<div style="margin-bottom:15px;"><button class="btn btn-success" onclick="goToImportForCurrentMonth()">📥 Import Transactions</button></div>` +
+                renderMonthCards(visible, 'dashSelectMonth');
             return;
         }
 
