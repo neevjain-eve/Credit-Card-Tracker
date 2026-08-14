@@ -569,16 +569,9 @@
                 </div>
             </div>
 
-            <!-- Submit Section -->
-            <div class="submit-section" id="submitSection" style="display: none;">
-                <h3>📤 Ready to Submit?</h3>
-                <p>Only transactions with a bill attached will be submitted. Pending transactions without a bill are skipped — attach a bill first (see "📎 Attach Bill" in the table below).</p>
-                <button class="btn btn-success btn-wide" onclick="submitPendingTransactions()">
-                    ✓ SUBMIT ALL PENDING TRANSACTIONS (with bill attached)
-                </button>
-            </div>
-
-            <!-- Transactions: month-packed drill-down (Month -> Client -> Data) -->
+            <!-- Transactions: month-packed drill-down (Month -> Client -> Data).
+                 Each transaction is submitted individually from its row (see
+                 renderTransactionTable) — a bill must be attached first. -->
             <h3 style="margin-top: 30px; margin-bottom: 15px;">All Transactions</h3>
             <div class="file-input-wrapper" style="max-width: 400px;">
                 <label>🔍 Search all (bypasses month/client browsing)</label>
@@ -1939,16 +1932,6 @@
         document.getElementById('totalCredit').textContent = '₹' + credit.toFixed(2);
         document.getElementById('pendingTrans').textContent = pending;
 
-        // CRITICAL: Show submit section ONLY if there are pending transactions
-        const submitSection = document.getElementById('submitSection');
-        if (pending > 0) {
-            submitSection.style.display = 'block';
-            console.log('Submit button SHOWN - pending:', pending);
-        } else {
-            submitSection.style.display = 'none';
-            console.log('Submit button HIDDEN - no pending');
-        }
-
         refreshTable();
     }
 
@@ -2035,7 +2018,10 @@
                             <td><span class="status-badge ${t.status === 'Pending' ? 'pending' : 'submitted'}">${t.status}</span></td>
                             <td>${billCellHtml(t)}</td>
                             <td>${billSubmittedCellHtml(t)}</td>
-                            <td>${currentUser?.role === 'Admin' ? `<button class="btn btn-danger" onclick="deleteTransaction(${t.id})" style="padding: 5px 10px; font-size: 12px;">Delete</button>` : '-'}</td>
+                            <td style="display:flex; gap:5px; flex-wrap:wrap;">
+                                ${submitCellHtml(t)}
+                                ${currentUser?.role === 'Admin' ? `<button class="btn btn-danger" onclick="deleteTransaction(${t.id})" style="padding: 5px 10px; font-size: 12px;">Delete</button>` : ''}
+                            </td>
                         </tr>
                     `).join('')}
                 </tbody>
@@ -2127,6 +2113,18 @@
         `;
     }
 
+    // Renders the per-row "Submit" control: enabled only once a bill is
+    // attached (compulsory), already-submitted rows just show a checkmark.
+    function submitCellHtml(t) {
+        if (t.status === 'Submitted') {
+            return '<span class="status-badge submitted">✓ Submitted</span>';
+        }
+        if (!t.billData) {
+            return '<button class="btn" disabled title="Attach a bill first" style="padding:5px 10px; font-size:12px; background:#e9ecef; color:#999; cursor:not-allowed;">Submit</button>';
+        }
+        return `<button class="btn btn-success" onclick="submitSingleTransaction(${t.id})" style="padding:5px 10px; font-size:12px;">✓ Submit</button>`;
+    }
+
     // Bill attach / view / remove
     let pendingBillTransactionId = null;
 
@@ -2215,51 +2213,43 @@
         }
     }
 
-    // Submit
-    function submitPendingTransactions() {
-        const allPending = getVisibleTransactions().filter(t => t.status === 'Pending');
-        // Only transactions with a bill attached are eligible for submission.
-        const pending = allPending.filter(t => !!t.billData);
-        const skippedNoBill = allPending.length - pending.length;
+    // Submit — one transaction at a time. A bill attachment is compulsory:
+    // there is no bulk "submit all" anymore, specifically so nothing can be
+    // submitted without its bill.
+    function submitSingleTransaction(id) {
+        const t = transactions.find(tr => tr.id === id);
+        if (!t) return;
 
-        if (pending.length === 0) {
-            if (skippedNoBill > 0) {
-                showAlert(`No transactions submitted — ${skippedNoBill} pending transaction(s) still need a bill attached first.`, 'error');
-            } else {
-                showAlert('✓ All transactions are already submitted!', 'info');
-            }
+        if (t.status === 'Submitted') {
+            showAlert('This transaction is already submitted.', 'info');
+            return;
+        }
+        if (!t.billData) {
+            showAlert('⚠️ Attach a bill before submitting this transaction.', 'error');
             return;
         }
 
-        const month = pending[0].monthYear;
-        const debit = pending.filter(t => t.type === 'Debit').reduce((sum, t) => sum + t.amount, 0);
-        const credit = pending.filter(t => t.type === 'Credit').reduce((sum, t) => sum + t.amount, 0);
-
         submissionId++;
-        const submission = {
+        const debit = t.type === 'Debit' ? t.amount : 0;
+        const credit = t.type === 'Credit' ? t.amount : 0;
+        submissions.push({
             id: submissionId,
             date: new Date().toLocaleDateString(),
-            month: month,
-            transactionCount: pending.length,
+            month: t.monthYear,
+            transactionCount: 1,
             totalDebit: debit,
             totalCredit: credit,
             netAmount: debit - credit,
             status: 'Submitted'
-        };
-
-        submissions.push(submission);
-
-        pending.forEach(t => {
-            t.status = 'Submitted';
-            t.submissionId = submissionId;
         });
+
+        t.status = 'Submitted';
+        t.submissionId = submissionId;
 
         saveData();
         refreshDashboard();
         if (typeof renderSubmissionsDrill === 'function') renderSubmissionsDrill();
-        const skippedNote = skippedNoBill > 0 ? ` (${skippedNoBill} skipped — no bill attached)` : '';
-        showAlert(`✓ Successfully submitted ${pending.length} transaction(s) for ${month}!${skippedNote}`, 'success');
-        console.log('Submitted:', pending.length, 'for month:', month, 'skipped (no bill):', skippedNoBill);
+        showAlert(`✓ Submitted "${t.transaction}" (${t.monthYear}).`, 'success');
     }
 
     // Builds one row per (month, client name, submission) combination from
