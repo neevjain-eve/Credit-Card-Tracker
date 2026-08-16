@@ -702,7 +702,10 @@
                 <button class="btn btn-primary" onclick="parseAndPreviewFile()">👁️ Preview Data</button>
             </div>
 
-            <!-- Preview Section -->
+            <!-- Preview Section (can be relocated onto the Dashboard by
+                 toggleInlineImport()'s file-select flow; previewSectionAnchor
+                 marks where it belongs when it's not inline) -->
+            <div id="previewSectionAnchor"></div>
             <div id="previewSection" class="preview-section">
                 <h3>Preview of Data to Import</h3>
                 <div class="file-input-wrapper" style="max-width: 400px;">
@@ -740,6 +743,12 @@
     // Drill-down state for the month-packed Dashboard/Submission History
     // views: month -> client name -> full data.
     let dashDrill = { month: null, name: null };
+    // When true, the Dashboard's "Import Transactions" button opened the
+    // file picker directly (no Step 2 panel shown). Once a file is chosen,
+    // it gets auto-parsed and only the preview/confirm panel is relocated
+    // into the Dashboard, so the user never sees the month/year + choose
+    // file box — just the file dialog, then the preview.
+    let inlineImportActive = false;
     let subDrill = { month: null, name: null };
     const MONTH_ORDER = ['January','February','March','April','May','June','July','August','September','October','November','December'];
     function compareMonthYearDesc(a, b) {
@@ -1566,7 +1575,8 @@
             currentUser = user;
             dashDrill = { month: null, name: null };
             subDrill = { month: null, name: null };
-            if (typeof restoreUploadWidgetToTab === 'function') restoreUploadWidgetToTab();
+            inlineImportActive = false;
+            if (typeof restorePreviewSectionToTab === 'function') restorePreviewSectionToTab();
             document.getElementById('loginPage').style.display = 'none';
             document.getElementById('mainApp').style.display = 'flex';
             document.getElementById('currentUser').textContent = `Welcome, ${user.name}`;
@@ -1632,7 +1642,10 @@
         event.target.classList.add('active');
 
         if (tabName === 'submissions') renderSubmissionsDrill();
-        if (tabName === 'upload' && typeof restoreUploadWidgetToTab === 'function') restoreUploadWidgetToTab();
+        if (tabName === 'upload') {
+            inlineImportActive = false;
+            if (typeof restorePreviewSectionToTab === 'function') restorePreviewSectionToTab();
+        }
     }
 
     // Template Download - Uses pure JS Blob download, NO external library needed.
@@ -1711,7 +1724,7 @@
     // File Upload — supports selecting multiple files at once for a bulk upload
     let selectedFiles = [];
 
-    function onFileSelected(event) {
+    async function onFileSelected(event) {
         selectedFiles = Array.from(event.target.files || []);
         selectedFile = selectedFiles[0] || null; // kept for backward compatibility
 
@@ -1722,6 +1735,14 @@
             document.getElementById('selectedFileName').innerHTML = label;
             document.getElementById('selectedFileName').style.display = 'block';
             console.log('Files selected:', selectedFiles.map(f => f.name));
+        }
+
+        // Inline import from the Dashboard skips the "Preview Data" click —
+        // as soon as a file is chosen, parse it and surface just the
+        // preview/confirm panel right there on the Dashboard.
+        if (inlineImportActive) {
+            await parseAndPreviewFile();
+            moveInlineImportPreviewToDashboard();
         }
     }
 
@@ -1975,6 +1996,11 @@
         if (filterInput) filterInput.value = '';
         selectedFile = null;
         document.getElementById('selectedFileName').style.display = 'none';
+
+        if (inlineImportActive) {
+            inlineImportActive = false;
+            restorePreviewSectionToTab();
+        }
     }
 
     // Returns only the transactions the currently logged-in user is allowed to
@@ -2103,20 +2129,15 @@
     function dashBackToMonths() { dashDrill = { month: null, name: null }; refreshTable(); }
     function dashBackToNames() { dashDrill.name = null; refreshTable(); }
 
-    // Moves the actual file-upload/preview widget (normally living in the
-    // Upload Data tab) into a stable slot on the Dashboard, so transactions
-    // can be imported right there without switching tabs. The widget keeps
-    // all its existing behavior (parseAndPreviewFile, importConfirmed, etc.)
-    // since it's the same DOM node/element IDs, just relocated. It moves
-    // back to its normal spot (uploadWidgetAnchor) whenever the Upload Data
-    // tab is opened via the nav bar, so that tab is never left empty.
+    // Clicking "Import Transactions" on the Dashboard sets the target
+    // month/year on the (hidden, off-tab) upload form and opens the native
+    // file picker immediately — no Step 2 panel is ever shown. Once a file
+    // is chosen, onFileSelected() auto-parses it and relocates just the
+    // preview/confirm panel into the Dashboard's inline slot.
     function toggleInlineImport(monthYear) {
         if (currentUser?.role !== 'Admin') return;
-        const slot = document.getElementById('inlineImportSlot');
-        const widget = document.getElementById('uploadWidget');
-        if (!slot || !widget) return;
-
-        slot.appendChild(widget); // no-op if already there
+        const fileInput = document.getElementById('fileInput');
+        if (!fileInput) return;
 
         const [monthName, yearVal] = String(monthYear).split('/');
         const monthEl = document.getElementById('uploadMonth');
@@ -2130,7 +2151,9 @@
             }
             yearEl.value = yearVal;
         }
-        widget.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+        inlineImportActive = true;
+        fileInput.click();
     }
 
     // Same as toggleInlineImport, but defaults to today's actual month/year
@@ -2141,13 +2164,24 @@
         toggleInlineImport(`${monthNames[now.getMonth()]}/${now.getFullYear()}`);
     }
 
-    // Moves the upload widget back to its normal home in the Upload Data
-    // tab (used when that tab is opened directly via the nav bar).
-    function restoreUploadWidgetToTab() {
-        const anchor = document.getElementById('uploadWidgetAnchor');
-        const widget = document.getElementById('uploadWidget');
-        if (anchor && widget && widget.parentElement !== anchor.parentElement) {
-            anchor.parentElement.insertBefore(widget, anchor.nextSibling);
+    // Moves the preview/confirm panel into the Dashboard's inline slot
+    // (called once a file has been auto-parsed after an inline import).
+    function moveInlineImportPreviewToDashboard() {
+        const slot = document.getElementById('inlineImportSlot');
+        const preview = document.getElementById('previewSection');
+        if (!slot || !preview) return;
+        slot.appendChild(preview); // no-op if already there
+        preview.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    // Moves the preview/confirm panel back to its normal home in the
+    // Upload Data tab (used when that tab is opened directly via the nav
+    // bar, on login, and once an inline import is confirmed/cancelled).
+    function restorePreviewSectionToTab() {
+        const anchor = document.getElementById('previewSectionAnchor');
+        const preview = document.getElementById('previewSection');
+        if (anchor && preview && preview.parentElement !== anchor.parentElement) {
+            anchor.parentElement.insertBefore(preview, anchor.nextSibling);
         }
     }
 
