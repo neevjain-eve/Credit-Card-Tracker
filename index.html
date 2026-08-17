@@ -1016,11 +1016,28 @@
     // silently overwrite the shared OneDrive file, and every other open
     // tab's next 20s poll would then pull that stale data back down —
     // producing a visible "glitching between correct and old data" loop
-    // across all connected sessions. Auto-pull now only runs once, right
-    // when OneDrive is (re)connected, not on a recurring timer. Admin can
-    // still manually pull via a fresh Connect OneDrive if ever needed.
+    // across all connected sessions. Auto-PULL now only runs once, right
+    // when OneDrive is (re)connected, not on a recurring timer.
+    //
+    // What DOES run on a recurring timer below is a one-directional PUSH
+    // (this browser's local state -> the shared OneDrive file), never a
+    // pull. That's safe from the ping-pong bug above: pushing repeatedly
+    // can only ever re-assert what's already sitting in this browser's own
+    // localStorage, it can never pull someone else's stale data back in.
+    // This exists so that "Connect OneDrive" alone is enough to guarantee
+    // your data eventually reaches OneDrive automatically, without needing
+    // to make a throwaway edit just to trigger saveData()'s push — useful
+    // right after connecting a browser whose local data (like Safari's)
+    // was never actually making it up to the shared file.
+    const ONEDRIVE_PUSH_POLL_MS = 30000; // how often to re-push local state
     function startOneDriveAutoSync() {
         if (oneDriveSyncTimer) { clearInterval(oneDriveSyncTimer); oneDriveSyncTimer = null; }
+        if (currentUser?.role !== 'Admin') return;
+        oneDriveSyncTimer = setInterval(() => {
+            if (currentUser?.role === 'Admin' && graphAccount && oneDriveConfig.shareLink) {
+                pushToOneDrive();
+            }
+        }, ONEDRIVE_PUSH_POLL_MS);
     }
 
     // On login, if this browser already has a cached Microsoft session
