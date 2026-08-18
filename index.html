@@ -2467,6 +2467,30 @@
         showAlert(`✓ Submitted "${t.transaction}" (${t.monthYear}).`, 'success');
     }
 
+    // Reverts a single submitted transaction back to Pending — for when a
+    // change is needed after submitting (wrong bill, wrong amount, etc.)
+    // without having to nuke every other submission via the Danger Zone's
+    // "Revert All". Removes just this transaction's own submission record;
+    // everything else stays submitted.
+    function revertSingleSubmission(id) {
+        const t = transactions.find(tr => tr.id === id);
+        if (!t) return;
+        if (t.status !== 'Submitted') {
+            showAlert('This transaction is not currently submitted.', 'info');
+            return;
+        }
+        if (!confirm(`Revert "${t.transaction}" back to Pending? You'll need to re-submit it (with its bill) once any changes are made.`)) return;
+
+        submissions = submissions.filter(s => s.id !== t.submissionId);
+        t.status = 'Pending';
+        delete t.submissionId;
+
+        saveData();
+        refreshDashboard();
+        if (typeof renderSubmissionsDrill === 'function') renderSubmissionsDrill();
+        showAlert(`↩️ Reverted "${t.transaction}" back to Pending.`, 'success');
+    }
+
     // Builds one row per (month, client name, submission) combination from
     // the underlying transactions, so mixed-month submissions still break
     // down correctly under the right month card.
@@ -2544,6 +2568,7 @@
                         <th>Total Credit (₹)</th>
                         <th>Net Amount (₹)</th>
                         <th>Bill</th>
+                        <th>Action</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -2557,6 +2582,7 @@
                             <td>₹${r.credit.toFixed(2)}</td>
                             <td>₹${r.net.toFixed(2)}</td>
                             <td>${r.billData ? `<button class="btn btn-primary" style="padding:5px 10px; font-size:12px;" onclick="viewBill(${r.transactionId})">📎 View</button>` : '-'}</td>
+                            <td><button class="btn btn-danger" style="padding:5px 10px; font-size:12px;" onclick="revertSingleSubmission(${r.transactionId})">↩️ Revert</button></td>
                         </tr>
                     `).join('')}
                 </tbody>
