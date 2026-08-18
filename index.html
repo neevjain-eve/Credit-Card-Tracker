@@ -803,7 +803,9 @@
 
     let googleDriveConfig = {
         clientId: localStorage.getItem('gdClientId') || GOOGLE_CLIENT_ID,
-        fileId: extractGoogleDriveFileId(localStorage.getItem('gdFileLink') || GOOGLE_DRIVE_FILE_LINK)
+        fileId: extractGoogleDriveFileId(localStorage.getItem('gdFileLink') || GOOGLE_DRIVE_FILE_LINK),
+        folderId: localStorage.getItem('gdFolderId') || '',
+        billsFolderId: localStorage.getItem('gdBillsFolderId') || ''
     };
 
     let googleTokenClient = null;
@@ -989,30 +991,168 @@
         }
     }
 
-    // Pushes current local state up to the shared Google Drive file. Fails
-    // silently (besides a console log) so the app keeps working offline /
-    // before Google Drive has been connected.
-    async function pushToGoogleDrive() {
-        if (currentUser?.role !== 'Admin') return; // Google Drive sync is Admin/staff only
-        if (!googleAccount || !googleDriveConfig.fileId) return;
+    // Builds the JSON that actually gets written to the shared Drive file.
+    // Bills are stripped out of each transaction here (base64 photos/PDFs
+    // can be huge) and left as a driveBillLink reference instead, once
+    // uploadBillToDrive() has copied the real file into the Bills folder.
+    // Pretty-printed (2-space indent) so the file is actually readable if
+    // anyone opens it directly in Drive, not one giant unbroken line.
+    function buildDriveDataPayload() {
+        const lightTransactions = transactions.map(t => {
+            const { billData, ...rest } = t;
+            return rest;
+        });
+        return JSON.stringify({ transactions: lightTransactions, submissions, transactionId, submissionId, updatedAt: Date.now() }, null, 2);
+    }
+
+    async function writeDataJsonToDrive() {
+        if (currentUser?.role !== 'Admin') return false; // Google Drive sync is Admin/staff only
+        if (!googleAccount || !googleDriveConfig.fileId) return false;
         try {
             const token = await getGoogleToken();
-            if (!token) return;
+            if (!token) return false;
             const fileId = await resolveSharedItem();
-            if (!fileId) return;
+            if (!fileId) return false;
 
+            const payload = buildDriveDataPayload();
             lastSyncedAt = Date.now();
             localStorage.setItem('ccTrackerSyncedAt', String(lastSyncedAt));
-            const payload = JSON.stringify({ transactions, submissions, transactionId, submissionId, updatedAt: lastSyncedAt });
 
             const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
                 method: 'PATCH',
                 headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
                 body: payload
             });
-            if (!res.ok) console.error('Google Drive push failed:', await res.text());
+            if (!res.ok) {
+                console.error('Google Drive push failed:', await res.text());
+                return false;
+            }
+            return true;
         } catch (err) {
             console.error('Google Drive push error:', err);
+            return false;
+        }
+    }
+
+    // Pushes current local state up to the shared Google Drive file, then
+    // uploads any not-yet-uploaded bill attachments into the Bills folder
+    // as their own files. Fails silently (besides a console log) so the
+    // app keeps working offline / before Google Drive has been connected.
+    async function pushToGoogleDrive() {
+        const ok = await writeDataJsonToDrive();
+        if (ok) syncBillsToGoogleDrive(); // fire-and-forget, re-writes data.json itself once done
+    }
+
+    // Finds/creates the "Credit Card Tracker" folder and its "Bills"
+    // subfolder in the connected Google account's Drive, so the data file
+    // and every bill attachment live somewhere organized instead of loose
+    // in Drive's root. IDs are cached in localStorage once created.
+    async function ensureGoogleDriveFolders() {
+        const token = await getGoogleToken();
+        if (!token) return null;
+
+        if (!googleDriveConfig.folderId) {
+            const res = await fetch('https://www.googleapis.com/drive/v3/files', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: 'Credit Card Tracker', mimeType: 'application/vnd.google-apps.folder' })
+            });
+            if (!res.ok) { console.error('Could not create root Drive folder:', await res.text()); return null; }
+            const data = await res.json();
+            googleDriveConfig.folderId = data.id;
+            localStorage.setItem('gdFolderId', data.id);
+        }
+
+        if (!googleDriveConfig.billsFolderId) {
+            const res = await fetch('https://www.googleapis.com/drive/v3/files', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: 'Bills', mimeType: 'application/vnd.google-apps.folder', parents: [googleDriveConfig.folderId] })
+            });
+            if (!res.ok) { console.error('Could not create Bills subfolder:', await res.text()); return null; }
+            const data = await res.json();
+            googleDriveConfig.billsFolderId = data.id;
+            localStorage.setItem('gdBillsFolderId', data.id);
+
+            // Share the whole Bills folder (anyone with the link can view)
+            // so every bill uploaded into it — including from other
+            // browsers later — is viewable without each individual file
+            // needing its own separate permission set.
+            try {
+                await fetch(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`, {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ role: 'reader', type: 'anyone' })
+                });
+            } catch (err) {
+                console.warn('Could not set Bills folder sharing (bills may not open for other Drive accounts until shared manually):', err);
+            }
+        }
+
+        return { folderId: googleDriveConfig.folderId, billsFolderId: googleDriveConfig.billsFolderId };
+    }
+
+    // Uploads one transaction's bill (currently only held as a base64 data
+    // URL in this browser) into the Bills subfolder as its own real file,
+    // and records the resulting Drive file so it can be viewed/found
+    // directly from any browser, not just the one that attached it.
+    async function uploadBillToDrive(t, token, billsFolderId) {
+        if (!t.billData) return false;
+        const match = t.billData.match(/^data:([^;]+);base64,([\s\S]*)$/);
+        if (!match) return false;
+        const mimeType = match[1];
+        const byteChars = atob(match[2]);
+        const byteNumbers = new Array(byteChars.length);
+        for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
+        const blob = new Blob([new Uint8Array(byteNumbers)], { type: mimeType });
+
+        const namePrefix = `${(t.name || 'Unassigned').replace(/[^a-zA-Z0-9]/g, '_')}_${(t.date || '').replace(/[^a-zA-Z0-9]/g, '_')}`;
+        const fileName = t.billFileName ? `${namePrefix}_${t.billFileName}` : `${namePrefix}_bill`;
+        const metadata = { name: fileName, parents: billsFolderId ? [billsFolderId] : [] };
+
+        const form = new FormData();
+        form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+        form.append('file', blob);
+
+        const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+            body: form
+        });
+        if (!res.ok) { console.error('Bill upload failed for transaction', t.id, await res.text()); return false; }
+        const data = await res.json();
+        t.driveBillFileId = data.id;
+        t.driveBillLink = `https://drive.google.com/file/d/${data.id}/view`;
+        return true;
+    }
+
+    // Uploads every bill that's been attached locally but never made it to
+    // Drive yet (driveBillFileId still unset). Runs after every data push
+    // so bills show up automatically without a separate manual step.
+    async function syncBillsToGoogleDrive() {
+        if (currentUser?.role !== 'Admin') return;
+        if (!googleAccount || !googleDriveConfig.fileId) return;
+        const pending = transactions.filter(t => t.billData && !t.driveBillFileId);
+        if (pending.length === 0) return;
+
+        const token = await getGoogleToken();
+        if (!token) return;
+        const folders = await ensureGoogleDriveFolders();
+        if (!folders) return;
+
+        let anyUploaded = false;
+        for (const t of pending) {
+            try {
+                const uploaded = await uploadBillToDrive(t, token, folders.billsFolderId);
+                if (uploaded) anyUploaded = true;
+            } catch (err) {
+                console.error('Bill upload error for transaction', t.id, err);
+            }
+        }
+
+        if (anyUploaded) {
+            localStorage.setItem('ccTracker', JSON.stringify({ transactions, submissions, transactionId, submissionId }));
+            await writeDataJsonToDrive(); // record the new driveBillLink references
         }
     }
 
@@ -1090,7 +1230,9 @@
         const clientId = document.getElementById('gdClientIdInput')?.value.trim() || '';
         const fileLinkRaw = document.getElementById('gdFileInput')?.value.trim() || '';
         const fileId = extractGoogleDriveFileId(fileLinkRaw);
-        googleDriveConfig = { clientId, fileId };
+        // Keep any already-known folder IDs (from createGoogleDriveDataFile /
+        // ensureGoogleDriveFolders in this browser) rather than wiping them.
+        googleDriveConfig = { clientId, fileId, folderId: googleDriveConfig.folderId || '', billsFolderId: googleDriveConfig.billsFolderId || '' };
         localStorage.setItem('gdClientId', clientId);
         localStorage.setItem('gdFileLink', fileLinkRaw);
         googleTokenClient = null; // force re-init with the new client id
@@ -1104,16 +1246,20 @@
         }
         try {
             const token = await getGoogleToken();
+            const folders = await ensureGoogleDriveFolders();
+            if (!folders) throw new Error('Could not set up the "Credit Card Tracker" folder in Drive.');
+
             const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: 'CreditCardTracker-data.json', mimeType: 'application/json' })
+                body: JSON.stringify({ name: 'CreditCardTracker-data.json', mimeType: 'application/json', parents: [folders.folderId] })
             });
             if (!createRes.ok) throw new Error(await createRes.text());
             const created = await createRes.json();
             const fileId = created.id;
+            googleDriveConfig.fileId = fileId;
 
-            const payload = JSON.stringify({ transactions, submissions, transactionId, submissionId, updatedAt: Date.now() });
+            const payload = buildDriveDataPayload();
             const uploadRes = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
                 method: 'PATCH',
                 headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -1123,7 +1269,7 @@
 
             const fileInput = document.getElementById('gdFileInput');
             if (fileInput) fileInput.value = fileId;
-            showAlert('✓ Data file created in your Google Drive. Now click "Create Shareable Edit Link".', 'success');
+            showAlert('✓ Data file created inside the "Credit Card Tracker" folder in your Google Drive (with a "Bills" subfolder for attachments). Now click "Create Shareable Edit Link".', 'success');
         } catch (err) {
             console.error('Create Google Drive file error:', err);
             showAlert('Could not create Google Drive file: ' + err.message, 'error');
@@ -2301,7 +2447,7 @@
     // Renders the "Bill" column: an Attach button if no bill yet,
     // or a View + Change/Remove set of controls once a bill is attached.
     function billCellHtml(t) {
-        if (t.billData) {
+        if (t.billData || t.driveBillLink) {
             return `
                 <div style="display:flex; gap:5px; flex-wrap:wrap;">
                     <button class="btn btn-primary" style="padding:5px 10px; font-size:12px;" onclick="viewBill(${t.id})">📎 View</button>
@@ -2384,7 +2530,16 @@
 
     function viewBill(id) {
         const t = transactions.find(tr => tr.id === id);
-        if (!t || !t.billData) return;
+        if (!t) return;
+
+        // Fall back to the copy stored in Google Drive's Bills folder if this
+        // browser doesn't have the file inline locally (e.g. it pulled a
+        // fresh copy from Drive, which never includes the heavy base64 data
+        // so the shared data.json file stays small and readable).
+        if (!t.billData) {
+            if (t.driveBillLink) { window.open(t.driveBillLink, '_blank'); return; }
+            return;
+        }
 
         const win = window.open('', '_blank');
         if (!win) {
@@ -2404,6 +2559,8 @@
         if (t) {
             t.billData = null;
             t.billFileName = null;
+            t.driveBillFileId = null;
+            t.driveBillLink = null;
             saveData();
             refreshTable();
             showAlert('Bill removed', 'success');
@@ -2505,7 +2662,7 @@
                 // Submissions are created one-per-transaction now, so each
                 // group maps to exactly one transaction — keep a reference
                 // to it so the bill can be shown right in this row.
-                groups[key] = { date: sub ? sub.date : '-', month: t.monthYear, name, count: 0, debit: 0, credit: 0, transactionId: t.id, description: t.transaction, billData: t.billData, billFileName: t.billFileName };
+                groups[key] = { date: sub ? sub.date : '-', month: t.monthYear, name, count: 0, debit: 0, credit: 0, transactionId: t.id, description: t.transaction, billData: t.billData, billFileName: t.billFileName, driveBillLink: t.driveBillLink };
             }
             groups[key].count++;
             if (t.type === 'Debit') groups[key].debit += t.amount;
@@ -2581,7 +2738,7 @@
                             <td>₹${r.debit.toFixed(2)}</td>
                             <td>₹${r.credit.toFixed(2)}</td>
                             <td>₹${r.net.toFixed(2)}</td>
-                            <td>${r.billData ? `<button class="btn btn-primary" style="padding:5px 10px; font-size:12px;" onclick="viewBill(${r.transactionId})">📎 View</button>` : '-'}</td>
+                            <td>${(r.billData || r.driveBillLink) ? `<button class="btn btn-primary" style="padding:5px 10px; font-size:12px;" onclick="viewBill(${r.transactionId})">📎 View</button>` : '-'}</td>
                             <td><button class="btn btn-danger" style="padding:5px 10px; font-size:12px;" onclick="revertSingleSubmission(${r.transactionId})">↩️ Revert</button></td>
                         </tr>
                     `).join('')}
