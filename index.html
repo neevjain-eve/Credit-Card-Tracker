@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Credit Card Expense Tracker</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.min.js" defer></script>
-    <script src="https://unpkg.com/@azure/msal-browser@2.38.3/lib/msal-browser.min.js" defer></script>
+    <script src="https://accounts.google.com/gsi/client" defer></script>
     <style>
         * {
             margin: 0;
@@ -521,12 +521,12 @@
         </div>
         <div class="header-right">
             <p>Role: <strong id="roleDisplay">-</strong></p>
-            <!-- OneDrive sync is Admin-only: only Admin/staff should hold the
+            <!-- Google Drive sync is Admin-only: only Admin/staff should hold the
                  credentials that can read/write the shared file. Client
                  logins never see or use this, so they can never end up with
                  the full multi-client dataset in their browser. -->
-            <p class="admin-only">☁️ OneDrive: <strong id="odStatus">Not connected</strong></p>
-            <button class="logout-btn admin-only" onclick="connectOneDrive()" style="margin-right:8px;">🔗 Connect OneDrive</button>
+            <p class="admin-only">☁️ Google Drive: <strong id="gdStatus">Not connected</strong></p>
+            <button class="logout-btn admin-only" onclick="connectGoogleDrive()" style="margin-right:8px;">🔗 Connect Google Drive</button>
             <button class="logout-btn" onclick="logout()">Logout</button>
         </div>
     </div>
@@ -539,7 +539,7 @@
     </div>
 
     <!-- Global alert banner — lives outside every tab-content so messages
-         (e.g. from the header's Connect OneDrive button) are visible no
+         (e.g. from the header's Connect Google Drive button) are visible no
          matter which tab is currently open. -->
     <div id="globalAlert" class="alert" style="margin: 15px 20px 0;"></div>
 
@@ -590,29 +590,29 @@
         <div id="upload" class="tab-content">
             <h2>Upload Transactions</h2>
 
-            <!-- OneDrive Sync Setup (Admin only, one-time setup) -->
+            <!-- Google Drive Sync Setup (Admin only, one-time setup) -->
             <div class="upload-section" style="background:#eef2ff; border-color:#c7d2fe;">
-                <h3>☁️ OneDrive Sync Setup (Staff/Admin only)</h3>
-                <p style="margin-bottom: 15px; color: #666; font-size: 13px;"><strong>Note:</strong> this connects your firm's own OneDrive as the backup/sync store — it is intentionally restricted to Admin/staff logins only. Client logins (e.g. Archit, Dilip, etc.) never see a "Connect OneDrive" option and never receive this shared file, since it contains every client's data. Clients continue to see whatever's already saved to the device/browser they're using. One-time setup: requires an Azure AD "App Registration" Client ID (ask your admin/IT for this).</p>
+                <h3>☁️ Google Drive Sync Setup (Staff/Admin only)</h3>
+                <p style="margin-bottom: 15px; color: #666; font-size: 13px;"><strong>Note:</strong> this connects the client's Google Drive as the backup/sync store — it is intentionally restricted to Admin/staff logins only. Client logins (e.g. Archit, Dilip, etc.) never see a "Connect Google Drive" option and never receive this shared file, since it contains every client's data. Clients continue to see whatever's already saved to the device/browser they're using. One-time setup: requires a Google Cloud OAuth Client ID (Google Cloud Console → APIs & Services → Credentials → OAuth Client ID, type "Web application", with this page's URL added under Authorized JavaScript origins, and Drive API enabled).</p>
 
                 <div class="file-input-wrapper">
-                    <label>Azure AD App Client ID</label>
-                    <input type="text" id="odClientIdInput" placeholder="e.g. 11111111-2222-3333-4444-555555555555" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:5px;">
+                    <label>Google OAuth Client ID</label>
+                    <input type="text" id="gdClientIdInput" placeholder="e.g. 1234567890-abc123.apps.googleusercontent.com" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:5px;">
                 </div>
                 <div class="file-input-wrapper">
-                    <label>OneDrive Shared File Link (leave blank until created below)</label>
-                    <input type="text" id="odShareLinkInput" placeholder="https://onedrive.live.com/... or https://yourtenant-my.sharepoint.com/..." style="width:100%; padding:10px; border:1px solid #ddd; border-radius:5px;">
+                    <label>Google Drive File ID or Share Link (leave blank until created below)</label>
+                    <input type="text" id="gdFileInput" placeholder="https://drive.google.com/file/d/.../view or the raw file ID" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:5px;">
                 </div>
 
                 <div class="button-group" style="margin-bottom: 10px;">
-                    <button class="btn btn-primary" onclick="saveOneDriveConfig()">💾 Save OneDrive Settings</button>
-                    <button class="btn btn-primary" onclick="connectOneDrive()">🔗 Connect OneDrive</button>
+                    <button class="btn btn-primary" onclick="saveGoogleDriveConfig()">💾 Save Google Drive Settings</button>
+                    <button class="btn btn-primary" onclick="connectGoogleDrive()">🔗 Connect Google Drive</button>
                 </div>
                 <div class="button-group">
-                    <button class="btn btn-success" onclick="createOneDriveDataFile()">📄 1. Create Data File in My OneDrive</button>
-                    <button class="btn btn-success" onclick="createShareLink()">🔗 2. Create Shareable Edit Link</button>
+                    <button class="btn btn-success" onclick="createGoogleDriveDataFile()">📄 1. Create Data File in My Google Drive</button>
+                    <button class="btn btn-success" onclick="createGoogleDriveShareLink()">🔗 2. Create Shareable Edit Link</button>
                 </div>
-                <p style="margin-top: 10px; font-size: 12px; color: #666;">Steps: Save your Client ID → Connect OneDrive (signs you into Microsoft) → Create Data File → Create Shareable Edit Link → Save OneDrive Settings again to store the link → share the Client ID + Link with your app maintainer. Every teammate then clicks "Connect OneDrive" in the header with their own Microsoft account to read/write the same file.</p>
+                <p style="margin-top: 10px; font-size: 12px; color: #666;">Steps: Save your Client ID → Connect Google Drive (signs you into Google) → Create Data File → Create Shareable Edit Link → Save Google Drive Settings again to store the link → share the Client ID + Link with your app maintainer. Every teammate then clicks "Connect Google Drive" in the header with their own Google account to read/write the same file.</p>
             </div>
 
             <!-- Auto-Publish Setup (Admin only, one-time setup) — talks directly
@@ -640,7 +640,7 @@
             <!-- Danger Zone (Admin only) -->
             <div class="upload-section" style="background:#fef2f2; border-color:#fecaca;">
                 <h3>⚠️ Danger Zone</h3>
-                <p style="margin-bottom: 15px; color: #666; font-size: 13px;">Marked everything as submitted by mistake? This resets every transaction back to Pending and clears all submission records, without deleting any transaction data. Also re-syncs the corrected state to OneDrive and GitHub.</p>
+                <p style="margin-bottom: 15px; color: #666; font-size: 13px;">Marked everything as submitted by mistake? This resets every transaction back to Pending and clears all submission records, without deleting any transaction data. Also re-syncs the corrected state to Google Drive and GitHub.</p>
                 <button class="btn btn-danger" onclick="revertAllSubmissions()">↩️ Revert All Submissions (back to Pending)</button>
                 <p style="margin: 15px 0 15px; color: #666; font-size: 13px;">Relabels every transaction's Month/Year to August 2026 (the actual day-of-month on each transaction is kept as-is — only the Month/Year grouping changes), so everything shows under one August/2026 card instead of split across May/June.</p>
                 <button class="btn btn-danger" onclick="relabelAllToAugust2026()">📅 Relabel All Transactions to August/2026</button>
@@ -776,60 +776,66 @@
         { id: 7, username: 'naimisha@gullak.money', password: 'naimisha@gullak123', name: 'Naimisha', role: 'Member', readLink: 'https://pdilipkumarassociates517-my.sharepoint.com/:u:/g/personal/naveen_pdka_in/IQAbILFuaCFDQY-Xhac2LquWAWNwB9fhGrzYOh7q0YAFxEk' }
     ];
 
-    // ================= OneDrive / Microsoft Graph sync =================
-    // Every logged-in user can connect their own Microsoft account so this
-    // app's data (transactions, submissions, counters) reads/writes through
-    // one shared OneDrive JSON file instead of staying trapped in a single
-    // browser's local storage.
+    // ================= Google Drive sync =================
+    // Every logged-in Admin/staff user can connect their own Google account
+    // so this app's data (transactions, submissions, counters) reads/writes
+    // through one shared Google Drive JSON file instead of staying trapped
+    // in a single browser's local storage.
     //
-    // ONEDRIVE_CLIENT_ID / ONEDRIVE_SHARED_FILE_LINK are baked in once the
-    // admin has finished the one-time OneDrive Sync Setup (see Upload tab) —
+    // GOOGLE_CLIENT_ID / GOOGLE_DRIVE_FILE_LINK are baked in once the admin
+    // has finished the one-time Google Drive Sync Setup (see Upload tab) —
     // until then, values saved via that panel (kept in this browser's
     // localStorage) are used as a fallback so it can be tested before being
     // hardcoded here for every teammate.
-    const ONEDRIVE_CLIENT_ID = '30c67dbc-be58-4688-a84a-847fd031da06';
-    const ONEDRIVE_SHARED_FILE_LINK = 'https://pdilipkumarassociates517-my.sharepoint.com/:u:/g/personal/naveen_pdka_in/IQCOX-DHH7_nR7iSeabQR9B0AaxgseGJK7YCR8ZUAlYdRtc';
-    const ONEDRIVE_SYNC_POLL_MS = 20000; // how often to auto-pull remote changes
+    const GOOGLE_CLIENT_ID = '';
+    const GOOGLE_DRIVE_FILE_LINK = '';
+    const GOOGLE_DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/userinfo.email';
 
-    let oneDriveConfig = {
-        clientId: localStorage.getItem('odClientId') || ONEDRIVE_CLIENT_ID,
-        shareLink: localStorage.getItem('odShareLink') || ONEDRIVE_SHARED_FILE_LINK
-    };
-
-    let msalInstance = null;
-    let msalInitPromise = null; // resolved ahead of time so the click that opens the login popup doesn't need to await anything first (browsers block popups opened after an async gap)
-    let graphAccount = null;
-    let oneDriveItemRef = null; // { driveId, itemId } once resolved
-    let oneDriveSyncTimer = null;
-    let lastSyncedAt = Number(localStorage.getItem('ccTrackerSyncedAt') || 0);
-
-    function initMsal() {
-        if (!oneDriveConfig.clientId) return null;
-        if (typeof msal === 'undefined') {
-            console.error('MSAL library did not load (network/firewall restriction).');
-            return null;
-        }
-        if (!msalInstance) {
-            msalInstance = new msal.PublicClientApplication({
-                auth: {
-                    clientId: oneDriveConfig.clientId,
-                    authority: 'https://login.microsoftonline.com/common',
-                    redirectUri: window.location.href.split('#')[0].split('?')[0]
-                },
-                cache: { cacheLocation: 'localStorage' }
-            });
-            msalInitPromise = msalInstance.initialize();
-        }
-        return msalInstance;
+    // Turns a pasted Google Drive share link (e.g.
+    // https://drive.google.com/file/d/FILE_ID/view?usp=sharing) or a bare
+    // file ID into just the file ID that the Drive API needs.
+    function extractGoogleDriveFileId(input) {
+        const val = (input || '').trim();
+        if (!val) return '';
+        const match = val.match(/\/d\/([a-zA-Z0-9_-]+)/) || val.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+        return match ? match[1] : val;
     }
 
-    // Polls for the deferred MSAL script to finish loading, up to timeoutMs.
-    function waitForMsal(timeoutMs) {
+    let googleDriveConfig = {
+        clientId: localStorage.getItem('gdClientId') || GOOGLE_CLIENT_ID,
+        fileId: extractGoogleDriveFileId(localStorage.getItem('gdFileLink') || GOOGLE_DRIVE_FILE_LINK)
+    };
+
+    let googleTokenClient = null;
+    let googleAccessToken = null;
+    let googleAccessTokenExpiry = 0;
+    let googleAccount = null; // { email }
+    let oneDriveSyncTimer = null; // recurring auto-push timer (name kept for continuity)
+    let lastSyncedAt = Number(localStorage.getItem('ccTrackerSyncedAt') || 0);
+
+    function initGoogleAuth() {
+        if (!googleDriveConfig.clientId) return null;
+        if (typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2) {
+            console.error('Google Identity Services library did not load (network/firewall restriction).');
+            return null;
+        }
+        if (!googleTokenClient) {
+            googleTokenClient = google.accounts.oauth2.initTokenClient({
+                client_id: googleDriveConfig.clientId,
+                scope: GOOGLE_DRIVE_SCOPES,
+                callback: () => {} // overridden per-request in requestGoogleToken()
+            });
+        }
+        return googleTokenClient;
+    }
+
+    // Polls for the deferred Google Identity Services script to finish loading, up to timeoutMs.
+    function waitForGoogleIdentity(timeoutMs) {
         return new Promise(resolve => {
-            if (typeof msal !== 'undefined') { resolve(true); return; }
+            if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) { resolve(true); return; }
             const start = Date.now();
             const interval = setInterval(() => {
-                if (typeof msal !== 'undefined') {
+                if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
                     clearInterval(interval);
                     resolve(true);
                 } else if (Date.now() - start > timeoutMs) {
@@ -840,128 +846,125 @@
         });
     }
 
-    function updateOneDriveStatus() {
-        const el = document.getElementById('odStatus');
-        if (el) el.textContent = graphAccount ? `Connected as ${graphAccount.username}` : 'Not connected';
+    function updateGoogleDriveStatus() {
+        const el = document.getElementById('gdStatus');
+        if (el) el.textContent = googleAccount ? `Connected as ${googleAccount.email}` : 'Not connected';
     }
 
-    async function connectOneDrive() {
-        // OneDrive sync is restricted to Admin/staff. Client logins must
+    // Requests an OAuth access token from Google Identity Services. opts.prompt
+    // can be '' (silent — succeeds only if the user already granted access in
+    // this browser session) or 'consent' (always shows the picker/consent screen).
+    function requestGoogleToken(opts) {
+        return new Promise((resolve, reject) => {
+            const client = initGoogleAuth();
+            if (!client) { reject(new Error('Google auth not initialized')); return; }
+            client.callback = (resp) => {
+                if (resp.error) { reject(resp); return; }
+                googleAccessToken = resp.access_token;
+                googleAccessTokenExpiry = Date.now() + (resp.expires_in * 1000) - 60000;
+                resolve(resp.access_token);
+            };
+            client.requestAccessToken(opts || {});
+        });
+    }
+
+    async function fetchGoogleUserEmail(token) {
+        try {
+            const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            if (!res.ok) return 'unknown';
+            const data = await res.json();
+            return data.email || 'unknown';
+        } catch (err) {
+            return 'unknown';
+        }
+    }
+
+    async function connectGoogleDrive() {
+        // Google Drive sync is restricted to Admin/staff. Client logins must
         // never pull the shared file, since it currently contains every
         // client's transactions — only the UI filters by name, so anyone
         // who downloaded the full file could see everyone else's data.
         if (currentUser?.role !== 'Admin') {
-            showAlert('OneDrive sync is only available to Admin/staff accounts.', 'error');
+            showAlert('Google Drive sync is only available to Admin/staff accounts.', 'error');
             return;
         }
 
-        console.log('Connect OneDrive clicked. Client ID configured:', !!oneDriveConfig.clientId, 'MSAL loaded:', typeof msal !== 'undefined');
+        console.log('Connect Google Drive clicked. Client ID configured:', !!googleDriveConfig.clientId, 'GIS loaded:', typeof google !== 'undefined' && !!(google.accounts && google.accounts.oauth2));
 
-        if (!oneDriveConfig.clientId) {
-            showAlert('OneDrive sync is not set up yet. An Admin needs to complete OneDrive Sync Setup in the Upload tab first.', 'error');
+        if (!googleDriveConfig.clientId) {
+            showAlert('Google Drive sync is not set up yet. An Admin needs to complete Google Drive Sync Setup in the Upload tab first.', 'error');
             return;
         }
-        if (typeof msal === 'undefined') {
+        if (typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2) {
             // Give the deferred script a few seconds to finish before giving up.
-            const loaded = await waitForMsal(5000);
+            const loaded = await waitForGoogleIdentity(5000);
             if (!loaded) {
-                showAlert('Could not load the OneDrive sign-in library — check your internet connection/firewall and try again.', 'error');
+                showAlert('Could not load the Google sign-in library — check your internet connection/firewall and try again.', 'error');
                 return;
             }
         }
         try {
-            const msalApp = initMsal();
-            if (!msalApp) {
-                showAlert('Could not start OneDrive sign-in (MSAL library failed to load).', 'error');
-                return;
-            }
-            // Only await if initialize() hasn't already settled — keeps the
-            // popup call as close to the original click as possible.
-            if (msalInitPromise) await msalInitPromise;
+            const token = await requestGoogleToken({ prompt: 'consent' });
+            const email = await fetchGoogleUserEmail(token);
+            googleAccount = { email };
+            updateGoogleDriveStatus();
+            showAlert(`✓ Connected to Google Drive as ${email}`, 'success');
 
-            const result = await msalApp.loginPopup({ scopes: ['Files.ReadWrite', 'User.Read'] });
-            graphAccount = result.account;
-            msalApp.setActiveAccount(graphAccount);
-            updateOneDriveStatus();
-            showAlert(`✓ Connected to OneDrive as ${graphAccount.username}`, 'success');
-
-            if (oneDriveConfig.shareLink) {
+            // Same safety rule as the silent reconnect: never let a pull
+            // silently wipe out real local data. If this browser already
+            // has transactions, push them up instead of pulling over them.
+            if (googleDriveConfig.fileId) {
                 if (transactions.length === 0) {
-                    await pullFromOneDrive();
+                    await pullFromGoogleDrive();
                 } else {
-                    await pushToOneDrive();
+                    await pushToGoogleDrive();
                 }
             }
             startOneDriveAutoSync();
         } catch (err) {
-            console.error('OneDrive connect error:', err);
-            if (err && (err.errorCode === 'popup_window_error' || err.errorCode === 'user_cancelled' || String(err.message || '').toLowerCase().includes('popup'))) {
-                showAlert('Your browser blocked the OneDrive sign-in popup. Please allow popups for this site and click "Connect OneDrive" again.', 'error');
+            console.error('Google Drive connect error:', err);
+            if (err && (err.type === 'popup_closed' || err.type === 'popup_failed_to_open' || String(err.message || '').toLowerCase().includes('popup'))) {
+                showAlert('Your browser blocked the Google sign-in popup. Please allow popups for this site and click "Connect Google Drive" again.', 'error');
                 return;
             }
-            showAlert('Could not connect to OneDrive: ' + err.message, 'error');
+            showAlert('Could not connect to Google Drive: ' + (err.message || err.error || 'unknown error'), 'error');
         }
     }
 
-    async function getGraphToken() {
-        const msalApp = initMsal();
-        if (!msalApp || !graphAccount) return null;
+    async function getGoogleToken() {
+        if (!googleDriveConfig.clientId) return null;
+        if (googleAccessToken && Date.now() < googleAccessTokenExpiry) return googleAccessToken;
         try {
-            const result = await msalApp.acquireTokenSilent({ scopes: ['Files.ReadWrite', 'User.Read'], account: graphAccount });
-            return result.accessToken;
+            return await requestGoogleToken({ prompt: '' });
         } catch (err) {
-            console.warn('Silent token failed, retrying interactively:', err);
-            try {
-                const result = await msalApp.acquireTokenPopup({ scopes: ['Files.ReadWrite', 'User.Read'] });
-                return result.accessToken;
-            } catch (err2) {
-                console.error('Interactive token acquisition failed:', err2);
-                return null;
-            }
-        }
-    }
-
-    // Encodes a OneDrive/SharePoint sharing URL into the Graph "shares" API's
-    // opaque share-id format (base64url of the URL, prefixed with "u!").
-    function encodeShareUrl(url) {
-        const base64 = btoa(url).replace(/=+$/, '').replace(/\//g, '_').replace(/\+/g, '-');
-        return 'u!' + base64;
-    }
-
-    async function resolveSharedItem() {
-        if (oneDriveItemRef) return oneDriveItemRef;
-        if (!oneDriveConfig.shareLink) return null;
-        const token = await getGraphToken();
-        if (!token) return null;
-
-        const encoded = encodeShareUrl(oneDriveConfig.shareLink);
-        const res = await fetch(`https://graph.microsoft.com/v1.0/shares/${encoded}/driveItem?$select=id,parentReference`, {
-            headers: { Authorization: `Bearer ${token}` }
-        });
-        if (!res.ok) {
-            console.error('Failed to resolve OneDrive shared item:', await res.text());
+            console.warn('Silent Google token request failed:', err);
             return null;
         }
-        const item = await res.json();
-        oneDriveItemRef = { driveId: item.parentReference.driveId, itemId: item.id };
-        return oneDriveItemRef;
     }
 
-    // Pulls the shared data.json from OneDrive and adopts it locally if it's
-    // newer than what this browser already has (simple last-write-wins).
-    async function pullFromOneDrive(opts) {
+    // Unlike OneDrive's opaque "shares" API, a Drive API file ID is already
+    // the direct identifier needed for get/update calls — nothing to resolve.
+    async function resolveSharedItem() {
+        return googleDriveConfig.fileId || null;
+    }
+
+    // Pulls the shared data.json from Google Drive and adopts it locally if
+    // it's newer than what this browser already has (simple last-write-wins).
+    async function pullFromGoogleDrive(opts) {
         const silent = opts && opts.silent;
         try {
-            const token = await getGraphToken();
+            const token = await getGoogleToken();
             if (!token) return;
-            const ref = await resolveSharedItem();
-            if (!ref) return;
+            const fileId = await resolveSharedItem();
+            if (!fileId) return;
 
-            const res = await fetch(`https://graph.microsoft.com/v1.0/drives/${ref.driveId}/items/${ref.itemId}/content`, {
+            const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             if (!res.ok) {
-                if (!silent) console.error('OneDrive pull failed:', await res.text());
+                if (!silent) console.error('Google Drive pull failed:', await res.text());
                 return;
             }
             const remote = await res.json();
@@ -982,34 +985,34 @@
                 }
             }
         } catch (err) {
-            if (!silent) console.error('OneDrive pull error:', err);
+            if (!silent) console.error('Google Drive pull error:', err);
         }
     }
 
-    // Pushes current local state up to the shared OneDrive file. Fails
+    // Pushes current local state up to the shared Google Drive file. Fails
     // silently (besides a console log) so the app keeps working offline /
-    // before OneDrive has been connected.
-    async function pushToOneDrive() {
-        if (currentUser?.role !== 'Admin') return; // OneDrive sync is Admin/staff only
-        if (!graphAccount || !oneDriveConfig.shareLink) return;
+    // before Google Drive has been connected.
+    async function pushToGoogleDrive() {
+        if (currentUser?.role !== 'Admin') return; // Google Drive sync is Admin/staff only
+        if (!googleAccount || !googleDriveConfig.fileId) return;
         try {
-            const token = await getGraphToken();
+            const token = await getGoogleToken();
             if (!token) return;
-            const ref = await resolveSharedItem();
-            if (!ref) return;
+            const fileId = await resolveSharedItem();
+            if (!fileId) return;
 
             lastSyncedAt = Date.now();
             localStorage.setItem('ccTrackerSyncedAt', String(lastSyncedAt));
             const payload = JSON.stringify({ transactions, submissions, transactionId, submissionId, updatedAt: lastSyncedAt });
 
-            const res = await fetch(`https://graph.microsoft.com/v1.0/drives/${ref.driveId}/items/${ref.itemId}/content`, {
-                method: 'PUT',
+            const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+                method: 'PATCH',
                 headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
                 body: payload
             });
-            if (!res.ok) console.error('OneDrive push failed:', await res.text());
+            if (!res.ok) console.error('Google Drive push failed:', await res.text());
         } catch (err) {
-            console.error('OneDrive push error:', err);
+            console.error('Google Drive push error:', err);
         }
     }
 
@@ -1038,96 +1041,120 @@
         if (oneDriveSyncTimer) { clearInterval(oneDriveSyncTimer); oneDriveSyncTimer = null; }
         if (currentUser?.role !== 'Admin') return;
         oneDriveSyncTimer = setInterval(() => {
-            if (currentUser?.role === 'Admin' && graphAccount && oneDriveConfig.shareLink) {
-                pushToOneDrive();
+            if (currentUser?.role === 'Admin' && googleAccount && googleDriveConfig.fileId) {
+                pushToGoogleDrive();
             }
         }, ONEDRIVE_PUSH_POLL_MS);
     }
 
-    // On login, if this browser already has a cached Microsoft session
-    // (from a previous "Connect OneDrive" in this app), reconnect quietly
-    // without popping up a login window again.
+    // On login, if this browser already has a valid Google token in memory
+    // (from a previous "Connect Google Drive" earlier in this same page
+    // session) or can silently re-acquire one, reconnect quietly without
+    // popping up a sign-in window again.
+    //
+    // IMPORTANT SAFETY RULE: only auto-pull here if THIS browser's local
+    // data is currently empty (nothing to lose). If this browser already
+    // has transactions, we push them up instead of pulling — otherwise a
+    // browser with real, unsynced local data (e.g. one whose earlier
+    // pushes were failing) would silently have its data replaced by
+    // whatever's sitting in the shared file, even if that's older, thinner,
+    // or empty. Pulling remains available, but only explicitly (a fresh
+    // manual "Connect Google Drive" click) or when there's truly nothing
+    // local to protect.
     async function attemptSilentOneDriveReconnect() {
-        if (currentUser?.role !== 'Admin') return; // OneDrive sync is Admin/staff only
-        if (!oneDriveConfig.clientId) return;
+        if (currentUser?.role !== 'Admin') return; // Google Drive sync is Admin/staff only
+        if (!googleDriveConfig.clientId) return;
         try {
-            const msalApp = initMsal();
-            if (!msalApp) return;
-            if (msalInitPromise) await msalInitPromise;
-            const accounts = msalApp.getAllAccounts();
-            if (accounts.length === 0) return;
+            const token = await getGoogleToken();
+            if (!token) return; // no silent session available — needs an explicit Connect click
 
-            graphAccount = accounts[0];
-            msalApp.setActiveAccount(graphAccount);
-            updateOneDriveStatus();
+            const email = await fetchGoogleUserEmail(token);
+            googleAccount = { email };
+            updateGoogleDriveStatus();
 
-            if (oneDriveConfig.shareLink) {
+            if (googleDriveConfig.fileId) {
                 if (transactions.length === 0) {
-                    await pullFromOneDrive({ silent: true });
+                    await pullFromGoogleDrive({ silent: true });
                 } else {
-                    await pushToOneDrive();
+                    await pushToGoogleDrive();
                 }
             }
             startOneDriveAutoSync();
         } catch (err) {
-            console.warn('Silent OneDrive reconnect skipped:', err);
+            console.warn('Silent Google Drive reconnect skipped:', err);
         }
     }
 
     // Admin-only one-time setup helpers
-    function saveOneDriveConfig() {
-        const clientId = document.getElementById('odClientIdInput')?.value.trim() || '';
-        const shareLink = document.getElementById('odShareLinkInput')?.value.trim() || '';
-        oneDriveConfig = { clientId, shareLink };
-        localStorage.setItem('odClientId', clientId);
-        localStorage.setItem('odShareLink', shareLink);
-        msalInstance = null; // force re-init with the new client id
-        oneDriveItemRef = null;
-        showAlert('✓ OneDrive settings saved in this browser. Click Connect OneDrive to test, then share these values with your app maintainer to bake in for everyone.', 'success');
+    function saveGoogleDriveConfig() {
+        const clientId = document.getElementById('gdClientIdInput')?.value.trim() || '';
+        const fileLinkRaw = document.getElementById('gdFileInput')?.value.trim() || '';
+        const fileId = extractGoogleDriveFileId(fileLinkRaw);
+        googleDriveConfig = { clientId, fileId };
+        localStorage.setItem('gdClientId', clientId);
+        localStorage.setItem('gdFileLink', fileLinkRaw);
+        googleTokenClient = null; // force re-init with the new client id
+        showAlert('✓ Google Drive settings saved in this browser. Click Connect Google Drive to test, then share these values with your app maintainer to bake in for everyone.', 'success');
     }
 
-    async function createOneDriveDataFile() {
-        if (!graphAccount) {
-            showAlert('Connect OneDrive first.', 'error');
+    async function createGoogleDriveDataFile() {
+        if (!googleAccount) {
+            showAlert('Connect Google Drive first.', 'error');
             return;
         }
         try {
-            const token = await getGraphToken();
+            const token = await getGoogleToken();
+            const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: 'CreditCardTracker-data.json', mimeType: 'application/json' })
+            });
+            if (!createRes.ok) throw new Error(await createRes.text());
+            const created = await createRes.json();
+            const fileId = created.id;
+
             const payload = JSON.stringify({ transactions, submissions, transactionId, submissionId, updatedAt: Date.now() });
-            const res = await fetch('https://graph.microsoft.com/v1.0/me/drive/root:/CreditCardTracker/data.json:/content', {
-                method: 'PUT',
+            const uploadRes = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+                method: 'PATCH',
                 headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
                 body: payload
             });
-            if (!res.ok) throw new Error(await res.text());
-            showAlert('✓ Data file created at /CreditCardTracker/data.json in your OneDrive. Now click "Create Shareable Edit Link".', 'success');
+            if (!uploadRes.ok) throw new Error(await uploadRes.text());
+
+            const fileInput = document.getElementById('gdFileInput');
+            if (fileInput) fileInput.value = fileId;
+            showAlert('✓ Data file created in your Google Drive. Now click "Create Shareable Edit Link".', 'success');
         } catch (err) {
-            console.error('Create OneDrive file error:', err);
-            showAlert('Could not create OneDrive file: ' + err.message, 'error');
+            console.error('Create Google Drive file error:', err);
+            showAlert('Could not create Google Drive file: ' + err.message, 'error');
         }
     }
 
-    async function createShareLink() {
-        if (!graphAccount) {
-            showAlert('Connect OneDrive first.', 'error');
+    async function createGoogleDriveShareLink() {
+        if (!googleAccount) {
+            showAlert('Connect Google Drive first.', 'error');
+            return;
+        }
+        const fileId = extractGoogleDriveFileId(document.getElementById('gdFileInput')?.value || googleDriveConfig.fileId);
+        if (!fileId) {
+            showAlert('Create the data file first (step 1).', 'error');
             return;
         }
         try {
-            const token = await getGraphToken();
-            const res = await fetch('https://graph.microsoft.com/v1.0/me/drive/root:/CreditCardTracker/data.json:/createLink', {
+            const token = await getGoogleToken();
+            const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ type: 'edit', scope: 'anonymous' })
+                body: JSON.stringify({ role: 'writer', type: 'anyone' })
             });
             if (!res.ok) throw new Error(await res.text());
-            const data = await res.json();
-            const link = data.link.webUrl;
-            const linkInput = document.getElementById('odShareLinkInput');
+            const link = `https://drive.google.com/file/d/${fileId}/view`;
+            const linkInput = document.getElementById('gdFileInput');
             if (linkInput) linkInput.value = link;
-            showAlert('✓ Shareable edit link created! Click "Save OneDrive Settings", then send the Client ID + this link to your app maintainer.', 'success');
+            showAlert('✓ Shareable edit link created! Click "Save Google Drive Settings", then send the Client ID + this link to your app maintainer.', 'success');
         } catch (err) {
             console.error('Create share link error:', err);
-            showAlert('Could not create a shareable link (your organization may block anonymous links — try again after asking IT to allow them, or use an "organization" scoped link instead). ' + err.message, 'error');
+            showAlert('Could not create a shareable link (your workspace admin may block link sharing outside the organization — ask IT to allow it, or restrict this to specific people\'s emails instead in Drive\'s own sharing UI). ' + err.message, 'error');
         }
     }
     // ---- Per-client read-only sync (no Microsoft sign-in needed on the client's end) ----
@@ -1349,44 +1376,49 @@
     }
 
     // (Deprecated OneDrive-anonymous-link approach — kept only so any old
-    // references don't error; this tenant blocks anonymous access so it no
-    // longer runs.)
+    // references don't error; unused since the switch to Google Drive.)
     async function generateClientReadLink_unused(username) {
         if (currentUser?.role !== 'Admin') {
             showAlert('Only Admin can generate client sync links.', 'error');
             return;
         }
-        if (!graphAccount) {
-            showAlert('Connect OneDrive first.', 'error');
+        if (!googleAccount) {
+            showAlert('Connect Google Drive first.', 'error');
             return;
         }
         const user = users.find(u => u.username === username);
         if (!user) return;
 
         try {
-            const token = await getGraphToken();
+            const token = await getGoogleToken();
             const myName = (user.name || '').trim().toLowerCase();
             const clientTransactions = transactions.filter(t => (t.name || '').trim().toLowerCase() === myName);
             const relevantSubmissionIds = new Set(clientTransactions.map(t => t.submissionId).filter(Boolean));
             const clientSubmissions = submissions.filter(s => relevantSubmissionIds.has(s.id));
             const payload = JSON.stringify({ transactions: clientTransactions, submissions: clientSubmissions, exportedAt: Date.now() });
 
-            const path = `CreditCardTracker/clients/${cssSafeId(username)}.json`;
-            const putRes = await fetch(`https://graph.microsoft.com/v1.0/me/drive/root:/${path}:/content`, {
-                method: 'PUT',
+            const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: `CreditCardTracker-client-${cssSafeId(username)}.json`, mimeType: 'application/json' })
+            });
+            if (!createRes.ok) throw new Error(await createRes.text());
+            const created = await createRes.json();
+            const fileId = created.id;
+
+            const uploadRes = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+                method: 'PATCH',
                 headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
                 body: payload
             });
-            if (!putRes.ok) throw new Error(await putRes.text());
+            if (!uploadRes.ok) throw new Error(await uploadRes.text());
 
-            const linkRes = await fetch(`https://graph.microsoft.com/v1.0/me/drive/root:/${path}:/createLink`, {
+            await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ type: 'view', scope: 'anonymous' })
+                body: JSON.stringify({ role: 'reader', type: 'anyone' })
             });
-            if (!linkRes.ok) throw new Error(await linkRes.text());
-            const linkData = await linkRes.json();
-            const link = linkData.link.webUrl;
+            const link = `https://drive.google.com/file/d/${fileId}/view`;
 
             user.readLink = link;
             const input = document.getElementById(`readLink_${cssSafeId(username)}`);
@@ -1398,14 +1430,14 @@
             showAlert(`Could not generate a link for ${user.name}: ` + err.message, 'error');
         }
     }
-    // ================= End OneDrive sync =================
+    // ================= End Google Drive sync =================
 
     // Initialize
     function init() {
         loadData();
         console.log('App initialized');
         console.log('XLSX library loaded:', typeof XLSX !== 'undefined');
-        console.log('MSAL library loaded:', typeof msal !== 'undefined');
+        console.log('Google Identity Services loaded:', typeof google !== 'undefined' && !!(google.accounts && google.accounts.oauth2));
 
         // Default the Upload tab's Month/Year selectors to the ACTUAL
         // current month/year, not a hardcoded value baked into the HTML —
@@ -1430,20 +1462,19 @@
             uploadYearEl.value = currentYear;
         }
 
-        const clientIdInput = document.getElementById('odClientIdInput');
-        const shareLinkInput = document.getElementById('odShareLinkInput');
-        if (clientIdInput) clientIdInput.value = oneDriveConfig.clientId || '';
-        if (shareLinkInput) shareLinkInput.value = oneDriveConfig.shareLink || '';
+        const clientIdInput = document.getElementById('gdClientIdInput');
+        const fileInput = document.getElementById('gdFileInput');
+        if (clientIdInput) clientIdInput.value = googleDriveConfig.clientId || '';
+        if (fileInput) fileInput.value = googleDriveConfig.fileId || '';
 
         const publishTokenInput = document.getElementById('publishTokenInput');
         if (publishTokenInput) publishTokenInput.value = publishConfig.token || '';
 
-        // Kick off MSAL's required initialize() as early as possible so it has
-        // already settled by the time someone clicks "Connect OneDrive" —
-        // otherwise the awaited gap before opening the login popup can get it
-        // silently blocked by the browser's popup blocker.
-        if (oneDriveConfig.clientId) {
-            try { initMsal(); } catch (err) { console.warn('MSAL pre-init skipped:', err); }
+        // Kick off Google Identity Services' token client init as early as
+        // possible so it has already settled by the time someone clicks
+        // "Connect Google Drive".
+        if (googleDriveConfig.clientId) {
+            try { initGoogleAuth(); } catch (err) { console.warn('Google auth pre-init skipped:', err); }
         }
     }
 
@@ -1547,7 +1578,7 @@
                 transactionId,
                 submissionId
             }));
-            pushToOneDrive(); // fire-and-forget sync to the shared OneDrive file
+            pushToGoogleDrive(); // fire-and-forget sync to the shared Google Drive file
             autoPublishAllClients(); // fire-and-forget: republish every client's own file
         } catch (error) {
             console.error('Save error:', error);
@@ -1637,16 +1668,17 @@
         }
     }
 
-    // Clears any in-memory OneDrive/Graph session so it can never be reused
+    // Clears any in-memory Google Drive session so it can never be reused
     // by whichever user is currently logged into the app.
     function resetOneDriveSessionState() {
-        graphAccount = null;
-        oneDriveItemRef = null;
+        googleAccount = null;
+        googleAccessToken = null;
+        googleAccessTokenExpiry = 0;
         if (oneDriveSyncTimer) {
             clearInterval(oneDriveSyncTimer);
             oneDriveSyncTimer = null;
         }
-        updateOneDriveStatus();
+        updateGoogleDriveStatus();
     }
 
     function logout() {
