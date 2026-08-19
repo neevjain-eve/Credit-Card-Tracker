@@ -704,6 +704,13 @@
                 <div id="selectedFileName" style="display: none; margin-bottom: 15px; padding: 10px; background: #d4edda; border-radius: 5px; color: #155724;"></div>
 
                 <button class="btn btn-primary" onclick="parseAndPreviewFile()">👁️ Preview Data</button>
+
+                <hr style="margin:20px 0; border:none; border-top:1px solid #e2e2e2;">
+                <div style="background:#fff8e6; border:1px solid #f5deb3; border-radius:8px; padding:12px 15px;">
+                    <strong>🗂️ Transaction Dump</strong>
+                    <p style="margin:6px 0 10px; font-size:13px; color:#666;">Got transactions to add mid-month, before the full statement is ready? Dump the file here — no need to pick a month above. Each row files itself under its own transaction date automatically, sits as Pending, and a bill can be attached whenever, on any day.</p>
+                    <button class="btn btn-primary" onclick="startTransactionDump()">🗂️ Dump Transactions (auto-detect month from dates)</button>
+                </div>
             </div>
 
             <!-- Preview Section (can be relocated onto the Dashboard by
@@ -743,6 +750,10 @@
     let submissionId = 0;
     let selectedFile = null;
     let parsedData = [];
+    // When true, the file about to be picked is a mid-month "Transaction
+    // Dump": on import, each row's own date decides its month/year instead
+    // of the Step 2 month/year selectors (which stay untouched/irrelevant).
+    let dumpModeActive = false;
 
     // Drill-down state for the month-packed Dashboard/Submission History
     // views: month -> client name -> full data.
@@ -2060,6 +2071,17 @@
     // File Upload — supports selecting multiple files at once for a bulk upload
     let selectedFiles = [];
 
+    // Kicks off a "Transaction Dump": opens the same file picker as Step 2,
+    // but flags the next import so each row's own date (not the Step 2
+    // month/year selectors) decides which month it lands in.
+    function startTransactionDump() {
+        if (currentUser?.role !== 'Admin') return;
+        const fileInput = document.getElementById('fileInput');
+        if (!fileInput) return;
+        dumpModeActive = true;
+        fileInput.click();
+    }
+
     async function onFileSelected(event) {
         selectedFiles = Array.from(event.target.files || []);
         selectedFile = selectedFiles[0] || null; // kept for backward compatibility
@@ -2079,6 +2101,12 @@
         if (inlineImportActive) {
             await parseAndPreviewFile();
             moveInlineImportPreviewToDashboard();
+        }
+
+        // Transaction Dump likewise skips straight to preview once a file
+        // is chosen — no separate "Preview Data" click needed.
+        if (dumpModeActive) {
+            await parseAndPreviewFile();
         }
     }
 
@@ -2245,7 +2273,11 @@
         const filterText = getPreviewFilterText();
         const filtered = getFilteredPreviewData();
 
-        let html = `<div style="margin-bottom: 10px;"><strong>Found ${parsedData.length} valid transaction(s)`;
+        let html = '';
+        if (dumpModeActive) {
+            html += '<div style="margin-bottom:10px; padding:8px 12px; background:#fff8e6; border:1px solid #f5deb3; border-radius:6px; font-size:13px; color:#7a5c00;">🗂️ Transaction Dump mode — each row below will be filed under its own transaction date\'s month, not a single month you pick.</div>';
+        }
+        html += `<div style="margin-bottom: 10px;"><strong>Found ${parsedData.length} valid transaction(s)`;
         if (filterText) html += ` — ${filtered.length} match "${filterText}"`;
         html += '</strong></div>';
 
@@ -2284,6 +2316,16 @@
         renderPreviewTable();
     }
 
+    // Turns a row's own date string into { month, year } matching the Step 2
+    // dropdown's format (e.g. "August", "2026"), for Transaction Dump mode.
+    // Returns null if the date can't be parsed, so the caller can fall back.
+    const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    function deriveMonthYearFromDate(dateStr) {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return null;
+        return { month: MONTH_NAMES[d.getMonth()], year: String(d.getFullYear()) };
+    }
+
     function importConfirmed() {
         const month = document.getElementById('uploadMonth').value;
         const year = document.getElementById('uploadYear').value;
@@ -2294,14 +2336,21 @@
             return;
         }
 
+        let undated = 0;
         rowsToImport.forEach(row => {
+            let rowMonth = month, rowYear = year;
+            if (dumpModeActive) {
+                const derived = deriveMonthYearFromDate(row.date);
+                if (derived) { rowMonth = derived.month; rowYear = derived.year; }
+                else undated++;
+            }
             transactionId++;
             transactions.push({
                 id: transactionId,
                 date: row.date,
-                month: month,
-                year: year,
-                monthYear: `${month}/${year}`,
+                month: rowMonth,
+                year: rowYear,
+                monthYear: `${rowMonth}/${rowYear}`,
                 transaction: row.transaction,
                 name: row.name || '',
                 amount: row.amount,
@@ -2319,8 +2368,11 @@
         saveData();
         refreshDashboard();
         const importedCount = rowsToImport.length;
+        const wasDump = dumpModeActive;
         cancelImport();
-        showAlert(`✓ Imported ${importedCount} transactions!`, 'success');
+        showAlert(wasDump
+            ? `✓ Dumped ${importedCount} transaction(s) — each filed under its own transaction date's month.${undated ? ` ${undated} had an unrecognized date and fell back to ${month}/${year}.` : ''} Attach bills and submit whenever.`
+            : `✓ Imported ${importedCount} transactions!`, 'success');
     }
 
     function cancelImport() {
@@ -2332,6 +2384,7 @@
         if (filterInput) filterInput.value = '';
         selectedFile = null;
         document.getElementById('selectedFileName').style.display = 'none';
+        dumpModeActive = false;
 
         if (inlineImportActive) {
             inlineImportActive = false;
