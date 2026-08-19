@@ -1180,8 +1180,14 @@
         return users.filter(u => u.role !== 'Admin' && u.username !== 'user1');
     }
 
+    // Transactions carry the cardholder's full statement name (e.g. "ARCHIT
+    // JAIPRAKASH MISHRA"), which is longer than the client's short login
+    // name ("Archit") — so match by substring, not exact equality.
     function txBelongsToClient(t, client) {
-        return (t.name || '').trim().toLowerCase() === (client.name || '').trim().toLowerCase();
+        const txName = (t.name || '').trim().toLowerCase();
+        const clientName = (client.name || '').trim().toLowerCase();
+        if (!txName || !clientName) return false;
+        return txName === clientName || txName.includes(clientName);
     }
 
     async function findOrCreateFolder(name, parentId, token) {
