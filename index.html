@@ -1770,12 +1770,13 @@
             showAlert('There is nothing submitted to revert.', 'info');
             return;
         }
-        const confirmed = confirm(`This will mark all ${submittedCount} submitted transaction(s) back to Pending and remove ${submissions.length} submission record(s). Transaction data itself is kept. Continue?`);
+        const confirmed = confirm(`This will mark all ${submittedCount} submitted transaction(s) back to Pending, remove ${submissions.length} submission record(s), and clear their attached bills (locally and from Drive). Transaction data itself is kept. Continue?`);
         if (!confirmed) return;
 
         transactions.forEach(t => {
             t.status = 'Pending';
             delete t.submissionId;
+            if (t.billData || t.driveBillFileId) clearTransactionBill(t);
         });
         submissions = [];
         dashDrill = { month: null, name: null };
@@ -1783,7 +1784,7 @@
         saveData();
         refreshDashboard();
         if (typeof renderSubmissionsDrill === 'function') renderSubmissionsDrill();
-        showAlert('↩️ All submissions reverted — everything is back to Pending.', 'success');
+        showAlert('↩️ All submissions reverted — everything is back to Pending and bills cleared.', 'success');
     }
 
     // Admin-only: relabels every transaction's Month/Year grouping to
@@ -2685,14 +2686,42 @@
         }
     }
 
+    // Trashes a transaction's uploaded bill file in Google Drive (best-effort
+    // — silently does nothing if not connected). Trash, not permanent
+    // delete, so it's recoverable from Drive's own Trash if needed.
+    async function deleteBillFromDrive(fileId) {
+        if (!fileId) return;
+        try {
+            const token = await getGoogleToken();
+            if (!token) return;
+            await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+                method: 'PATCH',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ trashed: true })
+            });
+        } catch (err) {
+            console.warn('Could not remove bill from Google Drive:', err);
+        }
+    }
+
+    // Clears every bill field on a transaction (local copy + Drive
+    // reference) and trashes the actual file in Drive. Shared by "remove
+    // bill", single-submission revert, and revert-all, so a bill never
+    // lingers once its transaction is no longer submitted.
+    function clearTransactionBill(t) {
+        const fileId = t.driveBillFileId;
+        t.billData = null;
+        t.billFileName = null;
+        t.driveBillFileId = null;
+        t.driveBillLink = null;
+        if (fileId) deleteBillFromDrive(fileId); // fire-and-forget
+    }
+
     function removeBill(id) {
         if (!confirm('Remove the attached bill for this transaction?')) return;
         const t = transactions.find(tr => tr.id === id);
         if (t) {
-            t.billData = null;
-            t.billFileName = null;
-            t.driveBillFileId = null;
-            t.driveBillLink = null;
+            clearTransactionBill(t);
             saveData();
             refreshTable();
             showAlert('Bill removed', 'success');
@@ -2768,16 +2797,17 @@
             showAlert('This transaction is not currently submitted.', 'info');
             return;
         }
-        if (!confirm(`Revert "${t.transaction}" back to Pending? You'll need to re-submit it (with its bill) once any changes are made.`)) return;
+        if (!confirm(`Revert "${t.transaction}" back to Pending? Its attached bill will be removed too — you'll need to attach a fresh one before resubmitting.`)) return;
 
         submissions = submissions.filter(s => s.id !== t.submissionId);
         t.status = 'Pending';
         delete t.submissionId;
+        clearTransactionBill(t);
 
         saveData();
         refreshDashboard();
         if (typeof renderSubmissionsDrill === 'function') renderSubmissionsDrill();
-        showAlert(`↩️ Reverted "${t.transaction}" back to Pending.`, 'success');
+        showAlert(`↩️ Reverted "${t.transaction}" back to Pending and removed its bill.`, 'success');
     }
 
     // Builds one row per (month, client name, submission) combination from
