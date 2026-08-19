@@ -613,6 +613,10 @@
                     <button class="btn btn-success" onclick="createGoogleDriveShareLink()">🔗 2. Create Shareable Edit Link</button>
                 </div>
                 <p style="margin-top: 10px; font-size: 12px; color: #666;">Steps: Save your Client ID → Connect Google Drive (signs you into Google) → Create Data File → Create Shareable Edit Link → Save Google Drive Settings again to store the link → share the Client ID + Link with your app maintainer. Every teammate then clicks "Connect Google Drive" in the header with their own Google account to read/write the same file.</p>
+                <div class="button-group" style="margin-top: 10px;">
+                    <button class="btn btn-success" onclick="organizeClientMonthFolders()">🗂️ Organize by Client &amp; Month in Drive</button>
+                </div>
+                <p style="margin-top: 6px; font-size: 12px; color: #666;">Builds/updates a clean, browsable copy inside the "Credit Card Tracker" Drive folder: <strong>Transactions/&lt;Client&gt;/&lt;Month&gt;.json</strong> (JSON only) and <strong>Attached Bills/&lt;Client&gt;/&lt;Month&gt;/</strong> (the actual bill files) — one subfolder per client, one file per month. Runs automatically after every save; click this any time to force a full re-organize.</p>
             </div>
 
             <!-- Auto-Publish Setup (Admin only, one-time setup) — talks directly
@@ -805,7 +809,9 @@
         clientId: localStorage.getItem('gdClientId') || GOOGLE_CLIENT_ID,
         fileId: extractGoogleDriveFileId(localStorage.getItem('gdFileLink') || GOOGLE_DRIVE_FILE_LINK),
         folderId: localStorage.getItem('gdFolderId') || '',
-        billsFolderId: localStorage.getItem('gdBillsFolderId') || ''
+        billsFolderId: localStorage.getItem('gdBillsFolderId') || '',
+        transactionsFolderId: localStorage.getItem('gdTransactionsFolderId') || '',
+        attachedBillsFolderId: localStorage.getItem('gdAttachedBillsFolderId') || ''
     };
 
     let googleTokenClient = null;
@@ -1040,7 +1046,10 @@
     // app keeps working offline / before Google Drive has been connected.
     async function pushToGoogleDrive() {
         const ok = await writeDataJsonToDrive();
-        if (ok) syncBillsToGoogleDrive(); // fire-and-forget, re-writes data.json itself once done
+        if (ok) {
+            syncBillsToGoogleDrive(); // fire-and-forget, re-writes data.json itself once done
+            organizeClientMonthFolders({ silent: true }); // fire-and-forget, mirrors into Transactions/ + Attached Bills/
+        }
     }
 
     // Finds/creates the "Credit Card Tracker" folder and its "Bills"
@@ -1156,6 +1165,143 @@
         }
     }
 
+    // ---- Organized per-client, per-month archive (Transactions / Attached Bills) ----
+    // In addition to the single shared data.json above (which is what the app
+    // itself reads/writes for live cross-browser sync), every push also
+    // mirrors the same data into a clean, human-browsable folder structure
+    // inside the "Credit Card Tracker" Drive folder:
+    //   Transactions/<Client Name>/<Month Year>.json   — JSON only, no bills
+    //   Attached Bills/<Client Name>/<Month Year>/...  — the actual bill files
+    // This is purely a readable archive for the firm to browse/audit by
+    // client and month. Safe to call repeatedly: existing folders/files are
+    // found by name and updated in place, never duplicated.
+
+    function getClientList() {
+        return users.filter(u => u.role !== 'Admin' && u.username !== 'user1');
+    }
+
+    function txBelongsToClient(t, client) {
+        return (t.name || '').trim().toLowerCase() === (client.name || '').trim().toLowerCase();
+    }
+
+    async function findOrCreateFolder(name, parentId, token) {
+        const q = `name='${name.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`;
+        const listRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)`, {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        if (listRes.ok) {
+            const data = await listRes.json();
+            if (data.files && data.files.length > 0) return data.files[0].id;
+        }
+        const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] })
+        });
+        if (!createRes.ok) throw new Error(await createRes.text());
+        return (await createRes.json()).id;
+    }
+
+    async function findOrCreateJsonFile(name, parentId, token) {
+        const q = `name='${name.replace(/'/g, "\\'")}' and '${parentId}' in parents and trashed=false`;
+        const listRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)`, {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        if (listRes.ok) {
+            const data = await listRes.json();
+            if (data.files && data.files.length > 0) return data.files[0].id;
+        }
+        const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, mimeType: 'application/json', parents: [parentId] })
+        });
+        if (!createRes.ok) throw new Error(await createRes.text());
+        return (await createRes.json()).id;
+    }
+
+    async function ensureOrganizedDriveFolders(token) {
+        if (!googleDriveConfig.folderId) return null;
+        if (!googleDriveConfig.transactionsFolderId) {
+            googleDriveConfig.transactionsFolderId = await findOrCreateFolder('Transactions', googleDriveConfig.folderId, token);
+            localStorage.setItem('gdTransactionsFolderId', googleDriveConfig.transactionsFolderId);
+        }
+        if (!googleDriveConfig.attachedBillsFolderId) {
+            googleDriveConfig.attachedBillsFolderId = await findOrCreateFolder('Attached Bills', googleDriveConfig.folderId, token);
+            localStorage.setItem('gdAttachedBillsFolderId', googleDriveConfig.attachedBillsFolderId);
+        }
+        return { transactionsFolderId: googleDriveConfig.transactionsFolderId, attachedBillsFolderId: googleDriveConfig.attachedBillsFolderId };
+    }
+
+    async function organizeClientMonthFolders(opts) {
+        const silent = opts && opts.silent;
+        if (currentUser?.role !== 'Admin') return false;
+        if (!googleAccount || !googleDriveConfig.folderId) return false;
+        try {
+            const token = await getGoogleToken();
+            if (!token) return false;
+            const orgFolders = await ensureOrganizedDriveFolders(token);
+            if (!orgFolders) return false;
+
+            const clients = getClientList();
+            let billsUploaded = false;
+
+            for (const client of clients) {
+                const clientTxFolderId = await findOrCreateFolder(client.name, orgFolders.transactionsFolderId, token);
+                const clientBillFolderId = await findOrCreateFolder(client.name, orgFolders.attachedBillsFolderId, token);
+
+                const months = new Set();
+                transactions.forEach(t => { if (txBelongsToClient(t, client) && t.monthYear) months.add(t.monthYear); });
+
+                for (const monthYear of months) {
+                    const monthTx = transactions.filter(t => txBelongsToClient(t, client) && t.monthYear === monthYear);
+                    const lightMonthTx = monthTx.map(t => { const { billData, ...rest } = t; return rest; });
+                    const relevantSubIds = new Set(monthTx.map(t => t.submissionId).filter(Boolean));
+                    const monthSubs = submissions.filter(s => relevantSubIds.has(s.id));
+                    const payload = JSON.stringify({
+                        client: client.name,
+                        month: monthYear,
+                        transactions: lightMonthTx,
+                        submissions: monthSubs,
+                        updatedAt: Date.now()
+                    }, null, 2);
+
+                    const fileName = `${cssSafeId(monthYear)}.json`;
+                    const fileId = await findOrCreateJsonFile(fileName, clientTxFolderId, token);
+                    const uploadRes = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+                        method: 'PATCH',
+                        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                        body: payload
+                    });
+                    if (!uploadRes.ok && !silent) console.error(`Organized push failed for ${client.name}/${monthYear}:`, await uploadRes.text());
+
+                    const pendingBills = monthTx.filter(t => t.billData && !t.driveBillFileId);
+                    if (pendingBills.length > 0) {
+                        const monthBillFolderId = await findOrCreateFolder(cssSafeId(monthYear), clientBillFolderId, token);
+                        for (const t of pendingBills) {
+                            try {
+                                const uploaded = await uploadBillToDrive(t, token, monthBillFolderId);
+                                if (uploaded) billsUploaded = true;
+                            } catch (err) {
+                                if (!silent) console.error('Organized bill upload error for transaction', t.id, err);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (billsUploaded) {
+                localStorage.setItem('ccTracker', JSON.stringify({ transactions, submissions, transactionId, submissionId }));
+                await writeDataJsonToDrive();
+            }
+            if (!silent) showAlert('✓ Organized Drive folders updated: Transactions/ and Attached Bills/, one subfolder per client, one file per month.', 'success');
+            return true;
+        } catch (err) {
+            if (!silent) { console.error('Organize Drive folders error:', err); showAlert('Could not organize Google Drive folders: ' + err.message, 'error'); }
+            return false;
+        }
+    }
+
     // NOTE: this used to run pullFromOneDrive() on a recurring 20s timer.
     // That caused a real data-corruption bug: if ANY other open Admin
     // browser tab/session still had stale local data (e.g. from before a
@@ -1232,7 +1378,13 @@
         const fileId = extractGoogleDriveFileId(fileLinkRaw);
         // Keep any already-known folder IDs (from createGoogleDriveDataFile /
         // ensureGoogleDriveFolders in this browser) rather than wiping them.
-        googleDriveConfig = { clientId, fileId, folderId: googleDriveConfig.folderId || '', billsFolderId: googleDriveConfig.billsFolderId || '' };
+        googleDriveConfig = {
+            clientId, fileId,
+            folderId: googleDriveConfig.folderId || '',
+            billsFolderId: googleDriveConfig.billsFolderId || '',
+            transactionsFolderId: googleDriveConfig.transactionsFolderId || '',
+            attachedBillsFolderId: googleDriveConfig.attachedBillsFolderId || ''
+        };
         localStorage.setItem('gdClientId', clientId);
         localStorage.setItem('gdFileLink', fileLinkRaw);
         googleTokenClient = null; // force re-init with the new client id
