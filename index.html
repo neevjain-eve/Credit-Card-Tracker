@@ -708,8 +708,13 @@
                 <hr style="margin:20px 0; border:none; border-top:1px solid #e2e2e2;">
                 <div style="background:#fff8e6; border:1px solid #f5deb3; border-radius:8px; padding:12px 15px;">
                     <strong>🗂️ Transaction Dump</strong>
-                    <p style="margin:6px 0 10px; font-size:13px; color:#666;">Got transactions to add mid-month, before the full statement is ready? Dump the file here — no need to pick a month above. Each row files itself under its own transaction date automatically, sits as Pending, and a bill can be attached whenever, on any day.</p>
-                    <button class="btn btn-primary" onclick="startTransactionDump()">🗂️ Dump Transactions (auto-detect month from dates)</button>
+                    <p style="margin:6px 0 10px; font-size:13px; color:#666;">Got a file mid-month, before the full statement is ready? Save it here now — it's just parked in Google Drive, nothing is imported yet. Come back any day, pick it from the list below, and import it then. Each row files itself under its own transaction date's month automatically.</p>
+                    <input type="file" id="dumpUploadInput" accept=".xlsx,.xls,.csv" multiple style="display:none;" onchange="onDumpUploadFileSelected(event)">
+                    <button class="btn btn-primary" onclick="triggerDumpFileUpload()">💾 Save File for Later</button>
+                    <div style="margin-top:14px;">
+                        <strong style="font-size:13px;">Saved dump files</strong>
+                        <div id="dumpFilesList" style="margin-top:8px;"><p style="font-size:13px; color:#999;">Connect Google Drive to see saved dump files.</p></div>
+                    </div>
                 </div>
             </div>
 
@@ -822,7 +827,8 @@
         folderId: localStorage.getItem('gdFolderId') || '',
         billsFolderId: localStorage.getItem('gdBillsFolderId') || '',
         transactionsFolderId: localStorage.getItem('gdTransactionsFolderId') || '',
-        attachedBillsFolderId: localStorage.getItem('gdAttachedBillsFolderId') || ''
+        attachedBillsFolderId: localStorage.getItem('gdAttachedBillsFolderId') || '',
+        dumpsFolderId: localStorage.getItem('gdDumpsFolderId') || ''
     };
 
     let googleTokenClient = null;
@@ -930,6 +936,7 @@
             googleAccount = { email };
             updateGoogleDriveStatus();
             showAlert(`✓ Connected to Google Drive as ${email}`, 'success');
+            if (typeof renderDumpFilesList === 'function') renderDumpFilesList();
 
             // Same safety rule as the silent reconnect: never let a pull
             // silently wipe out real local data. If this browser already
@@ -1992,6 +1999,7 @@
         if (tabName === 'upload') {
             inlineImportActive = false;
             if (typeof restorePreviewSectionToTab === 'function') restorePreviewSectionToTab();
+            if (typeof renderDumpFilesList === 'function') renderDumpFilesList();
         }
     }
 
@@ -2071,15 +2079,143 @@
     // File Upload — supports selecting multiple files at once for a bulk upload
     let selectedFiles = [];
 
-    // Kicks off a "Transaction Dump": opens the same file picker as Step 2,
-    // but flags the next import so each row's own date (not the Step 2
-    // month/year selectors) decides which month it lands in.
-    function startTransactionDump() {
+    // ---- Transaction Dump storage (Google Drive) ----
+    // Lets Admin park a raw statement file in Drive right away, then come
+    // back on any day, pick it from the list, and only then parse + import
+    // it. Splits "I have the file" from "I'm ready to process it" instead
+    // of forcing an immediate import.
+
+    async function ensureDumpsFolder(token) {
+        if (!googleDriveConfig.folderId) return null;
+        if (!googleDriveConfig.dumpsFolderId) {
+            googleDriveConfig.dumpsFolderId = await findOrCreateFolder('Transaction Dumps', googleDriveConfig.folderId, token);
+            localStorage.setItem('gdDumpsFolderId', googleDriveConfig.dumpsFolderId);
+        }
+        return googleDriveConfig.dumpsFolderId;
+    }
+
+    function triggerDumpFileUpload() {
         if (currentUser?.role !== 'Admin') return;
-        const fileInput = document.getElementById('fileInput');
-        if (!fileInput) return;
-        dumpModeActive = true;
-        fileInput.click();
+        if (!googleAccount) {
+            showAlert('Connect Google Drive first (top-right) to save dump files.', 'error');
+            return;
+        }
+        const input = document.getElementById('dumpUploadInput');
+        if (input) input.click();
+    }
+
+    async function onDumpUploadFileSelected(event) {
+        const files = Array.from(event.target.files || []);
+        event.target.value = '';
+        if (files.length === 0) return;
+        try {
+            const token = await getGoogleToken();
+            if (!token) return;
+            const folderId = await ensureDumpsFolder(token);
+            if (!folderId) throw new Error('Could not set up the Transaction Dumps folder.');
+
+            let saved = 0;
+            for (const file of files) {
+                const stamped = `${new Date().toISOString().slice(0, 10)}_${file.name}`;
+                const metadata = { name: stamped, parents: [folderId] };
+                const form = new FormData();
+                form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+                form.append('file', file);
+                const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${token}` },
+                    body: form
+                });
+                if (res.ok) saved++;
+                else console.error('Dump save failed for', file.name, await res.text());
+            }
+            showAlert(`✓ Saved ${saved} of ${files.length} file(s) to Transaction Dumps in Drive. Import them any time from the list below.`, 'success');
+            renderDumpFilesList();
+        } catch (err) {
+            console.error('Save dump error:', err);
+            showAlert('Could not save file(s) to Drive: ' + err.message, 'error');
+        }
+    }
+
+    // Refreshes the "Saved dump files" list from Drive. Called whenever the
+    // Upload tab is opened and after any save/import/delete.
+    async function renderDumpFilesList() {
+        const container = document.getElementById('dumpFilesList');
+        if (!container) return;
+        if (!googleAccount) {
+            container.innerHTML = '<p style="font-size:13px; color:#999;">Connect Google Drive to see saved dump files.</p>';
+            return;
+        }
+        try {
+            const token = await getGoogleToken();
+            if (!token) return;
+            const folderId = await ensureDumpsFolder(token);
+            if (!folderId) return;
+            const q = `'${folderId}' in parents and trashed=false`;
+            const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&orderBy=createdTime desc&pageSize=50`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            const data = await res.json();
+            const files = data.files || [];
+            if (files.length === 0) {
+                container.innerHTML = '<p style="font-size:13px; color:#999;">No saved dump files yet.</p>';
+                return;
+            }
+            container.innerHTML = files.map(f => `
+                <div style="display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid #eee;">
+                    <span style="flex:1; font-size:13px;">${f.name}</span>
+                    <button class="btn btn-success" style="padding:6px 12px; font-size:12px;" onclick="importDumpFile('${f.id}', '${f.name.replace(/'/g, "\\'")}')">📥 Select &amp; Import</button>
+                    <button class="btn btn-danger" style="padding:6px 12px; font-size:12px;" onclick="deleteDumpFile('${f.id}')">🗑️</button>
+                </div>
+            `).join('');
+        } catch (err) {
+            console.error('List dump files error:', err);
+            container.innerHTML = '<p style="font-size:13px; color:#c00;">Could not load saved dump files.</p>';
+        }
+    }
+
+    async function deleteDumpFile(fileId) {
+        if (!confirm('Delete this saved dump file? This cannot be undone from here.')) return;
+        try {
+            const token = await getGoogleToken();
+            if (!token) return;
+            await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+                method: 'PATCH',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ trashed: true })
+            });
+            renderDumpFilesList();
+        } catch (err) {
+            console.error('Delete dump file error:', err);
+            showAlert('Could not delete the file.', 'error');
+        }
+    }
+
+    // Downloads a saved dump file from Drive, parses it, and opens the
+    // normal preview/confirm panel (same per-row date auto-filing as
+    // before). The Drive copy is only trashed once the import is confirmed
+    // — cancelling leaves it in the list to try again later.
+    let pendingDumpFileId = null;
+    async function importDumpFile(fileId, fileName) {
+        try {
+            const token = await getGoogleToken();
+            if (!token) return;
+            const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, { headers: { Authorization: `Bearer ${token}` } });
+            if (!res.ok) throw new Error(await res.text());
+            const blob = await res.blob();
+            const file = new File([blob], fileName);
+
+            dumpModeActive = true;
+            pendingDumpFileId = fileId;
+            selectedFiles = [file];
+            selectedFile = file;
+            document.getElementById('selectedFileName').innerHTML = `✓ Loaded from Drive: <strong>${fileName}</strong>`;
+            document.getElementById('selectedFileName').style.display = 'block';
+            await parseAndPreviewFile();
+        } catch (err) {
+            console.error('Import dump file error:', err);
+            showAlert('Could not load that dump file: ' + err.message, 'error');
+        }
     }
 
     async function onFileSelected(event) {
@@ -2101,12 +2237,6 @@
         if (inlineImportActive) {
             await parseAndPreviewFile();
             moveInlineImportPreviewToDashboard();
-        }
-
-        // Transaction Dump likewise skips straight to preview once a file
-        // is chosen — no separate "Preview Data" click needed.
-        if (dumpModeActive) {
-            await parseAndPreviewFile();
         }
     }
 
@@ -2326,7 +2456,7 @@
         return { month: MONTH_NAMES[d.getMonth()], year: String(d.getFullYear()) };
     }
 
-    function importConfirmed() {
+    async function importConfirmed() {
         const month = document.getElementById('uploadMonth').value;
         const year = document.getElementById('uploadYear').value;
         const rowsToImport = getFilteredPreviewData();
@@ -2369,9 +2499,29 @@
         refreshDashboard();
         const importedCount = rowsToImport.length;
         const wasDump = dumpModeActive;
+        const dumpFileIdToTrash = pendingDumpFileId;
         cancelImport();
+
+        // Once a saved dump file has actually been imported, remove it from
+        // the "Saved dump files" list so it isn't imported twice.
+        if (wasDump && dumpFileIdToTrash) {
+            try {
+                const token = await getGoogleToken();
+                if (token) {
+                    await fetch(`https://www.googleapis.com/drive/v3/files/${dumpFileIdToTrash}`, {
+                        method: 'PATCH',
+                        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ trashed: true })
+                    });
+                }
+            } catch (err) {
+                console.warn('Could not remove imported dump file from Drive:', err);
+            }
+            renderDumpFilesList();
+        }
+
         showAlert(wasDump
-            ? `✓ Dumped ${importedCount} transaction(s) — each filed under its own transaction date's month.${undated ? ` ${undated} had an unrecognized date and fell back to ${month}/${year}.` : ''} Attach bills and submit whenever.`
+            ? `✓ Imported ${importedCount} transaction(s) from the saved dump — each filed under its own transaction date's month.${undated ? ` ${undated} had an unrecognized date and fell back to ${month}/${year}.` : ''} Attach bills and submit whenever.`
             : `✓ Imported ${importedCount} transactions!`, 'success');
     }
 
@@ -2385,6 +2535,7 @@
         selectedFile = null;
         document.getElementById('selectedFileName').style.display = 'none';
         dumpModeActive = false;
+        pendingDumpFileId = null;
 
         if (inlineImportActive) {
             inlineImportActive = false;
