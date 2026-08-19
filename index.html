@@ -616,7 +616,7 @@
                 <div class="button-group" style="margin-top: 10px;">
                     <button class="btn btn-success" onclick="organizeClientMonthFolders()">🗂️ Organize by Client &amp; Month in Drive</button>
                 </div>
-                <p style="margin-top: 6px; font-size: 12px; color: #666;">Builds/updates a clean, browsable copy inside the "Credit Card Tracker" Drive folder: <strong>Transactions/&lt;Client&gt;/&lt;Month&gt;.json</strong> (JSON only) and <strong>Attached Bills/&lt;Client&gt;/&lt;Month&gt;/</strong> (the actual bill files) — one subfolder per client, one file per month. Runs automatically after every save; click this any time to force a full re-organize.</p>
+                <p style="margin-top: 6px; font-size: 12px; color: #666;">Builds/updates a clean, browsable copy inside the "Credit Card Tracker" Drive folder: <strong>Transactions/&lt;Client&gt;/&lt;Month&gt;.json</strong> (JSON only) and <strong>Bills/&lt;Client&gt;/&lt;Month&gt;/</strong> (the actual bill files) — one subfolder per client, one file per month. Runs automatically after every save; click this any time to force a full re-organize.</p>
             </div>
 
             <!-- Auto-Publish Setup (Admin only, one-time setup) — talks directly
@@ -1047,15 +1047,15 @@
     async function pushToGoogleDrive() {
         const ok = await writeDataJsonToDrive();
         if (ok) {
-            syncBillsToGoogleDrive(); // fire-and-forget, re-writes data.json itself once done
-            organizeClientMonthFolders({ silent: true }); // fire-and-forget, mirrors into Transactions/ + Attached Bills/
+            organizeClientMonthFolders({ silent: true }); // fire-and-forget, mirrors into Transactions/ + Bills/
         }
     }
 
-    // Finds/creates the "Credit Card Tracker" folder and its "Bills"
-    // subfolder in the connected Google account's Drive, so the data file
-    // and every bill attachment live somewhere organized instead of loose
-    // in Drive's root. IDs are cached in localStorage once created.
+    // Finds/creates just the root "Credit Card Tracker" folder in the
+    // connected Google account's Drive, so the data file lives somewhere
+    // organized instead of loose in Drive's root. ID is cached in
+    // localStorage once created. (The "Bills" subfolder is handled by
+    // ensureOrganizedDriveFolders() below, alongside "Transactions".)
     async function ensureGoogleDriveFolders() {
         const token = await getGoogleToken();
         if (!token) return null;
@@ -1070,32 +1070,6 @@
             const data = await res.json();
             googleDriveConfig.folderId = data.id;
             localStorage.setItem('gdFolderId', data.id);
-        }
-
-        if (!googleDriveConfig.billsFolderId) {
-            const res = await fetch('https://www.googleapis.com/drive/v3/files', {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: 'Bills', mimeType: 'application/vnd.google-apps.folder', parents: [googleDriveConfig.folderId] })
-            });
-            if (!res.ok) { console.error('Could not create Bills subfolder:', await res.text()); return null; }
-            const data = await res.json();
-            googleDriveConfig.billsFolderId = data.id;
-            localStorage.setItem('gdBillsFolderId', data.id);
-
-            // Share the whole Bills folder (anyone with the link can view)
-            // so every bill uploaded into it — including from other
-            // browsers later — is viewable without each individual file
-            // needing its own separate permission set.
-            try {
-                await fetch(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`, {
-                    method: 'POST',
-                    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ role: 'reader', type: 'anyone' })
-                });
-            } catch (err) {
-                console.warn('Could not set Bills folder sharing (bills may not open for other Drive accounts until shared manually):', err);
-            }
         }
 
         return { folderId: googleDriveConfig.folderId, billsFolderId: googleDriveConfig.billsFolderId };
@@ -1165,13 +1139,13 @@
         }
     }
 
-    // ---- Organized per-client, per-month archive (Transactions / Attached Bills) ----
+    // ---- Organized per-client, per-month archive (Transactions / Bills) ----
     // In addition to the single shared data.json above (which is what the app
     // itself reads/writes for live cross-browser sync), every push also
     // mirrors the same data into a clean, human-browsable folder structure
     // inside the "Credit Card Tracker" Drive folder:
     //   Transactions/<Client Name>/<Month Year>.json   — JSON only, no bills
-    //   Attached Bills/<Client Name>/<Month Year>/...  — the actual bill files
+    //   Bills/<Client Name>/<Month Year>/...            — the actual bill files
     // This is purely a readable archive for the firm to browse/audit by
     // client and month. Safe to call repeatedly: existing folders/files are
     // found by name and updated in place, never duplicated.
@@ -1232,11 +1206,11 @@
             googleDriveConfig.transactionsFolderId = await findOrCreateFolder('Transactions', googleDriveConfig.folderId, token);
             localStorage.setItem('gdTransactionsFolderId', googleDriveConfig.transactionsFolderId);
         }
-        if (!googleDriveConfig.attachedBillsFolderId) {
-            googleDriveConfig.attachedBillsFolderId = await findOrCreateFolder('Attached Bills', googleDriveConfig.folderId, token);
-            localStorage.setItem('gdAttachedBillsFolderId', googleDriveConfig.attachedBillsFolderId);
+        if (!googleDriveConfig.billsFolderId) {
+            googleDriveConfig.billsFolderId = await findOrCreateFolder('Bills', googleDriveConfig.folderId, token);
+            localStorage.setItem('gdBillsFolderId', googleDriveConfig.billsFolderId);
         }
-        return { transactionsFolderId: googleDriveConfig.transactionsFolderId, attachedBillsFolderId: googleDriveConfig.attachedBillsFolderId };
+        return { transactionsFolderId: googleDriveConfig.transactionsFolderId, billsFolderId: googleDriveConfig.billsFolderId };
     }
 
     async function organizeClientMonthFolders(opts) {
@@ -1254,7 +1228,7 @@
 
             for (const client of clients) {
                 const clientTxFolderId = await findOrCreateFolder(client.name, orgFolders.transactionsFolderId, token);
-                const clientBillFolderId = await findOrCreateFolder(client.name, orgFolders.attachedBillsFolderId, token);
+                const clientBillFolderId = await findOrCreateFolder(client.name, orgFolders.billsFolderId, token);
 
                 const months = new Set();
                 transactions.forEach(t => { if (txBelongsToClient(t, client) && t.monthYear) months.add(t.monthYear); });
@@ -1300,7 +1274,7 @@
                 localStorage.setItem('ccTracker', JSON.stringify({ transactions, submissions, transactionId, submissionId }));
                 await writeDataJsonToDrive();
             }
-            if (!silent) showAlert('✓ Organized Drive folders updated: Transactions/ and Attached Bills/, one subfolder per client, one file per month.', 'success');
+            if (!silent) showAlert('✓ Organized Drive folders updated: Transactions/ and Bills/, one subfolder per client, one file per month.', 'success');
             return true;
         } catch (err) {
             if (!silent) { console.error('Organize Drive folders error:', err); showAlert('Could not organize Google Drive folders: ' + err.message, 'error'); }
