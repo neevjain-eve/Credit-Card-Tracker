@@ -713,6 +713,33 @@
                     <button class="btn btn-primary" onclick="triggerDumpFileUpload()">💾 Save File for Later</button>
                     <div style="margin-top:14px;">
                         <strong style="font-size:13px;">Saved dump files</strong>
+                        <div style="display:flex; gap:8px; align-items:center; margin:8px 0; flex-wrap:wrap;">
+                            <select id="dumpFilterMonth" onchange="applyDumpFilters()" style="padding:6px; border:1px solid #ddd; border-radius:5px; font-size:12px;">
+                                <option value="">All Months</option>
+                                <option>January</option>
+                                <option>February</option>
+                                <option>March</option>
+                                <option>April</option>
+                                <option>May</option>
+                                <option>June</option>
+                                <option>July</option>
+                                <option>August</option>
+                                <option>September</option>
+                                <option>October</option>
+                                <option>November</option>
+                                <option>December</option>
+                            </select>
+                            <select id="dumpFilterYear" onchange="applyDumpFilters()" style="padding:6px; border:1px solid #ddd; border-radius:5px; font-size:12px;">
+                                <option value="">All Years</option>
+                                <option>2024</option>
+                                <option>2025</option>
+                                <option>2026</option>
+                                <option>2027</option>
+                            </select>
+                            <input type="date" id="dumpFilterDate" onchange="applyDumpFilters()" style="padding:5px; border:1px solid #ddd; border-radius:5px; font-size:12px;" title="Filter to an exact save date">
+                            <button class="btn btn-danger" style="padding:6px 10px; font-size:12px;" onclick="clearDumpFilters()">✕ Clear</button>
+                        </div>
+                        <p style="font-size:11px; color:#999; margin:0 0 6px;">Filters by the date a file was saved here, not the transaction dates inside it.</p>
                         <div id="dumpFilesList" style="margin-top:8px;"><p style="font-size:13px; color:#999;">Connect Google Drive to see saved dump files.</p></div>
                     </div>
                 </div>
@@ -2138,11 +2165,16 @@
     }
 
     // Refreshes the "Saved dump files" list from Drive. Called whenever the
-    // Upload tab is opened and after any save/import/delete.
+    // Upload tab is opened and after any save/import/delete. Caches the raw
+    // list so the Month/Year/Date filters below can re-render instantly
+    // without another Drive round-trip on every filter change.
+    let dumpFilesCache = [];
+
     async function renderDumpFilesList() {
         const container = document.getElementById('dumpFilesList');
         if (!container) return;
         if (!googleAccount) {
+            dumpFilesCache = [];
             container.innerHTML = '<p style="font-size:13px; color:#999;">Connect Google Drive to see saved dump files.</p>';
             return;
         }
@@ -2152,26 +2184,70 @@
             const folderId = await ensureDumpsFolder(token);
             if (!folderId) return;
             const q = `'${folderId}' in parents and trashed=false`;
-            const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&orderBy=createdTime desc&pageSize=50`, {
+            const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&orderBy=createdTime desc&pageSize=100`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             const data = await res.json();
-            const files = data.files || [];
-            if (files.length === 0) {
-                container.innerHTML = '<p style="font-size:13px; color:#999;">No saved dump files yet.</p>';
-                return;
-            }
-            container.innerHTML = files.map(f => `
-                <div style="display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid #eee;">
-                    <span style="flex:1; font-size:13px;">${f.name}</span>
-                    <button class="btn btn-success" style="padding:6px 12px; font-size:12px;" onclick="importDumpFile('${f.id}', '${f.name.replace(/'/g, "\\'")}')">📥 Select &amp; Import</button>
-                    <button class="btn btn-danger" style="padding:6px 12px; font-size:12px;" onclick="deleteDumpFile('${f.id}')">🗑️</button>
-                </div>
-            `).join('');
+            dumpFilesCache = data.files || [];
+            applyDumpFilters();
         } catch (err) {
             console.error('List dump files error:', err);
             container.innerHTML = '<p style="font-size:13px; color:#c00;">Could not load saved dump files.</p>';
         }
+    }
+
+    // Every dump file is saved with a "YYYY-MM-DD_" prefix (the day it was
+    // saved) — this pulls that back out so the Month/Year/Date filters can
+    // work without touching Drive again.
+    function dumpFileStampDate(name) {
+        const m = name.match(/^(\d{4})-(\d{2})-(\d{2})_/);
+        return m ? { year: m[1], month: m[2], day: m[3], iso: `${m[1]}-${m[2]}-${m[3]}` } : null;
+    }
+
+    // Re-renders #dumpFilesList from the cached list using whatever the
+    // Month/Year/Date filter inputs currently say. An exact date, if set,
+    // takes priority over Month/Year.
+    function applyDumpFilters() {
+        const container = document.getElementById('dumpFilesList');
+        if (!container) return;
+
+        if (dumpFilesCache.length === 0) {
+            container.innerHTML = '<p style="font-size:13px; color:#999;">No saved dump files yet.</p>';
+            return;
+        }
+
+        const monthFilter = document.getElementById('dumpFilterMonth')?.value || '';
+        const yearFilter = document.getElementById('dumpFilterYear')?.value || '';
+        const dateFilter = document.getElementById('dumpFilterDate')?.value || '';
+
+        const filtered = dumpFilesCache.filter(f => {
+            const stamp = dumpFileStampDate(f.name);
+            if (!stamp) return true;
+            if (dateFilter) return stamp.iso === dateFilter;
+            if (yearFilter && stamp.year !== yearFilter) return false;
+            if (monthFilter && MONTH_NAMES[parseInt(stamp.month, 10) - 1] !== monthFilter) return false;
+            return true;
+        });
+
+        if (filtered.length === 0) {
+            container.innerHTML = '<p style="font-size:13px; color:#999;">No saved dump files match that filter.</p>';
+            return;
+        }
+
+        container.innerHTML = filtered.map(f => `
+            <div style="display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid #eee;">
+                <span style="flex:1; font-size:13px;">${f.name}</span>
+                <button class="btn btn-success" style="padding:6px 12px; font-size:12px;" onclick="importDumpFile('${f.id}', '${f.name.replace(/'/g, "\\'")}')">📥 Select &amp; Import</button>
+                <button class="btn btn-danger" style="padding:6px 12px; font-size:12px;" onclick="deleteDumpFile('${f.id}')">🗑️</button>
+            </div>
+        `).join('');
+    }
+
+    function clearDumpFilters() {
+        const m = document.getElementById('dumpFilterMonth'); if (m) m.value = '';
+        const y = document.getElementById('dumpFilterYear'); if (y) y.value = '';
+        const d = document.getElementById('dumpFilterDate'); if (d) d.value = '';
+        applyDumpFilters();
     }
 
     async function deleteDumpFile(fileId) {
