@@ -351,7 +351,7 @@
             <!-- Raw statement import: converts bank .xls exports automatically -->
             <div class="upload-section" style="border-left:4px solid #236561;">
                 <h3>Import Bank Statements Directly</h3>
-                <p style="margin-bottom: 15px; color: #6b7280; font-size: 13px;">Upload the bank's own credit card statement files (.xls) exactly as they come — no need to reformat them first. Each statement is read, converted into the tracker's format, and shown for review before anything is imported. Select several at once to do every cardholder in one go. Each transaction is filed under its own date's month automatically, so statements that span two months are handled correctly.</p>
+                <p style="margin-bottom: 15px; color: #6b7280; font-size: 13px;">Upload the bank's own credit card statement files (.xls) exactly as they come — no need to reformat them first. Each statement is read, converted into the tracker's format, and shown for review before anything is imported. Select several at once to do every cardholder in one go. Everything is filed under the <strong>current month</strong> — each row keeps its real transaction date, but the whole import stays grouped together even when a statement covers more than one month.</p>
 
                 <div class="file-input-wrapper">
                     <label>Select statement file(s) — hold Ctrl/Cmd to pick several:</label>
@@ -2363,15 +2363,45 @@
             return;
         }
 
-        // Statements often span two calendar months, so each row is filed
-        // under its own transaction date rather than one chosen month.
-        dumpModeActive = true;
+        // File everything under the CURRENT month, not each transaction's own
+        // date. A statement issued now routinely contains last month's spend;
+        // grouping it under the month it is being processed keeps one import
+        // together in a single card instead of splitting it across two.
+        // Each row keeps its real transaction date — only the month/year
+        // grouping is set to today's.
+        dumpModeActive = false;
         pendingDumpFileId = null;
+        setUploadPeriodToCurrentMonth();
 
         showPreview();
+        const period = setUploadPeriodToCurrentMonth();
         showAlert('Converted ' + parsedData.length + ' transactions — ' + summary.join(' · ') +
                   (totalSkipped ? ' (' + totalSkipped + ' non-transaction rows ignored)' : '') +
+                  '. These will be filed under ' + period.month + ' ' + period.year +
                   '. Review below, then Confirm & Import.', 'success');
+    }
+
+    // Points the Step 2 month/year selectors at the current month, adding the
+    // year as an option if the list doesn't already carry it.
+    function setUploadPeriodToCurrentMonth() {
+        const now = new Date();
+        const monthName = MONTH_NAMES[now.getMonth()];
+        const yearStr = String(now.getFullYear());
+
+        const monthSel = document.getElementById('uploadMonth');
+        const yearSel = document.getElementById('uploadYear');
+        if (monthSel) monthSel.value = monthName;
+        if (yearSel) {
+            const known = Array.from(yearSel.options).some(o => o.value === yearStr || o.text === yearStr);
+            if (!known) {
+                const opt = document.createElement('option');
+                opt.text = yearStr;
+                opt.value = yearStr;
+                yearSel.appendChild(opt);
+            }
+            yearSel.value = yearStr;
+        }
+        return { month: monthName, year: yearStr };
     }
 
     function onStatementFilesSelected(event) {
