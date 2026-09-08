@@ -287,7 +287,43 @@
             <!-- Google Drive Sync Setup (Admin only, one-time setup) -->
             <div class="upload-section" style="background:#eef2ff; border-color:#c7d2fe;">
                 <h3>☁️ Google Drive Sync Setup (Staff/Admin only)</h3>
-                <p style="margin-bottom: 15px; color: #666; font-size: 13px;"><strong>Note:</strong> this connects the client's Google Drive as the backup/sync store — it is intentionally restricted to Admin/staff logins only. Client logins (e.g. Archit, Dilip, etc.) never see a "Connect Google Drive" option and never receive this shared file, since it contains every client's data. Clients continue to see whatever's already saved to the device/browser they're using. One-time setup: requires a Google Cloud OAuth Client ID (Google Cloud Console → APIs & Services → Credentials → OAuth Client ID, type "Web application", with this page's URL added under Authorized JavaScript origins, and Drive API enabled).</p>
+                <p style="margin-bottom: 15px; color: #666; font-size: 13px;"><strong>Note:</strong> this connects Google Drive as the backup/sync store, and is restricted to Admin/staff logins. Cardholder logins never see a "Connect Google Drive" option and never receive the shared file, since it holds every cardholder's data.</p>
+
+                <details style="margin-bottom:18px; border:1px solid #cfe0dd; border-radius:12px; background:#f4faf9;">
+                    <summary style="cursor:pointer; padding:14px 16px; font-weight:600; color:#17423f; list-style:none;">Step-by-step: how to connect Google Drive (first time only)</summary>
+                    <div style="padding:0 18px 18px;">
+
+                        <p style="margin:6px 0 12px; font-size:13px; color:#17423f;"><strong>Part A — in Google Cloud Console.</strong> Do this once, signed in with the Google account that should hold the data file.</p>
+                        <ol style="margin:0 0 18px 20px; font-size:13px; color:#3c4a48; line-height:1.85;">
+                            <li>Open <strong>console.cloud.google.com</strong> and sign in.</li>
+                            <li>Create a new project, or pick an existing one from the dropdown at the top.</li>
+                            <li>Go to <strong>APIs &amp; Services → Library</strong>, search for <strong>Google Drive API</strong>, and click <strong>Enable</strong>.</li>
+                            <li>Go to <strong>APIs &amp; Services → OAuth consent screen</strong>. Choose <strong>External</strong>, fill in an app name and your email, and save. If it stays in "Testing" mode, add each admin's Google address under <strong>Test users</strong>, or they will not be able to connect.</li>
+                            <li>Go to <strong>APIs &amp; Services → Credentials → Create Credentials → OAuth client ID</strong>. Set <strong>Application type</strong> to <strong>Web application</strong>.</li>
+                            <li>Under <strong>Authorized JavaScript origins</strong>, click "Add URI" and paste the site's origin — for this app that is <code style="background:#e2eeec; padding:1px 5px; border-radius:4px;">https://neevjain-eve.github.io</code>. Use the origin only: no <code style="background:#e2eeec; padding:1px 5px; border-radius:4px;">/Credit-Card-Tracker/</code> on the end, and no trailing slash. Getting this wrong is the most common reason sign-in fails.</li>
+                            <li>Click <strong>Create</strong> and copy the <strong>Client ID</strong> (it ends in <code style="background:#e2eeec; padding:1px 5px; border-radius:4px;">.apps.googleusercontent.com</code>).</li>
+                        </ol>
+
+                        <p style="margin:6px 0 12px; font-size:13px; color:#17423f;"><strong>Part B — back on this page.</strong> Use the fields directly below this box.</p>
+                        <ol style="margin:0 0 18px 20px; font-size:13px; color:#3c4a48; line-height:1.85;">
+                            <li>Paste the Client ID into <strong>Google OAuth Client ID</strong>, then click <strong>Save Google Drive Settings</strong>.</li>
+                            <li>Click <strong>Connect Google Drive</strong>, sign in, and approve the permission prompt.</li>
+                            <li>Click <strong>1. Create Data File in My Google Drive</strong> — this creates the shared data.json that every admin reads and writes.</li>
+                            <li>Click <strong>2. Create Shareable Edit Link</strong>.</li>
+                            <li>Click <strong>Save Google Drive Settings</strong> once more, so the link is stored next to the Client ID.</li>
+                            <li>Send the Client ID and the link to any other admin. Each of them pastes the same two values here and clicks <strong>Connect Google Drive</strong> with their own Google account.</li>
+                        </ol>
+
+                        <p style="margin:6px 0 10px; font-size:13px; color:#17423f;"><strong>If something goes wrong</strong></p>
+                        <ul style="margin:0 0 4px 20px; font-size:12.5px; color:#3c4a48; line-height:1.8;">
+                            <li><strong>Nothing happens when you click Connect</strong> — the sign-in opens in a popup. Allow popups for this site, then click again.</li>
+                            <li><strong>"Google Drive sync is not set up yet"</strong> — the Client ID has not been saved. Repeat Part B step 1.</li>
+                            <li><strong>Google shows an origin or redirect error</strong> — the Authorized JavaScript origin does not match. Re-check Part A step 6; it must be exactly the origin, with no path and no trailing slash.</li>
+                            <li><strong>"Access blocked" or "app not verified"</strong> — your Google address is not listed under Test users on the consent screen. Add it in Part A step 4.</li>
+                            <li><strong>Opened from a file on disk</strong> — Google sign-in only works from the real web address, not a local copy of the page.</li>
+                        </ul>
+                    </div>
+                </details>
 
                 <div class="file-input-wrapper">
                     <label>Google OAuth Client ID</label>
@@ -825,23 +861,64 @@
     // organized instead of loose in Drive's root. ID is cached in
     // localStorage once created. (The "Bills" subfolder is handled by
     // ensureOrganizedDriveFolders() below, alongside "Transactions".)
+    // Looks for an existing "Credit Card Tracker" folder in My Drive before
+    // making one. The old version only checked this browser's localStorage,
+    // so a second admin — or the same person after clearing site data —
+    // silently created ANOTHER folder with the same name, and the app then
+    // wrote into whichever one that browser happened to remember.
+    async function findOrCreateRootFolder(token) {
+        if (googleDriveConfig.folderId) return googleDriveConfig.folderId;
+
+        const q = "name='Credit Card Tracker' and mimeType='application/vnd.google-apps.folder' and 'root' in parents and trashed=false";
+        try {
+            const listRes = await fetch('https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(q) + '&fields=files(id,name)', {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            if (listRes.ok) {
+                const data = await listRes.json();
+                if (data.files && data.files.length > 0) {
+                    googleDriveConfig.folderId = data.files[0].id;
+                    localStorage.setItem('gdFolderId', data.files[0].id);
+                    return googleDriveConfig.folderId;
+                }
+            }
+        } catch (err) {
+            console.warn('Could not search for the Drive folder, will create one:', err);
+        }
+
+        const res = await fetch('https://www.googleapis.com/drive/v3/files', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: 'Credit Card Tracker', mimeType: 'application/vnd.google-apps.folder' })
+        });
+        if (!res.ok) { console.error('Could not create root Drive folder:', await res.text()); return null; }
+        const data = await res.json();
+        googleDriveConfig.folderId = data.id;
+        localStorage.setItem('gdFolderId', data.id);
+        return data.id;
+    }
+
     async function ensureGoogleDriveFolders() {
         const token = await getGoogleToken();
         if (!token) return null;
 
-        if (!googleDriveConfig.folderId) {
-            const res = await fetch('https://www.googleapis.com/drive/v3/files', {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: 'Credit Card Tracker', mimeType: 'application/vnd.google-apps.folder' })
-            });
-            if (!res.ok) { console.error('Could not create root Drive folder:', await res.text()); return null; }
-            const data = await res.json();
-            googleDriveConfig.folderId = data.id;
-            localStorage.setItem('gdFolderId', data.id);
+        const folderId = await findOrCreateRootFolder(token);
+        if (!folderId) return null;
+
+        // Resolve the Bills subfolder here too. Previously this returned an
+        // empty billsFolderId on a fresh setup, and uploadBillToDrive then
+        // uploaded receipts with no parent — which drops them loose in the
+        // top level of My Drive instead of inside the Bills folder.
+        if (!googleDriveConfig.billsFolderId) {
+            try {
+                googleDriveConfig.billsFolderId = await findOrCreateFolder('Bills', folderId, token);
+                localStorage.setItem('gdBillsFolderId', googleDriveConfig.billsFolderId);
+            } catch (err) {
+                console.error('Could not create the Bills folder:', err);
+            }
         }
 
-        return { folderId: googleDriveConfig.folderId, billsFolderId: googleDriveConfig.billsFolderId };
+        return { folderId: folderId, billsFolderId: googleDriveConfig.billsFolderId };
     }
 
     // Uploads one transaction's bill (currently only held as a base64 data
@@ -860,7 +937,14 @@
 
         const namePrefix = `${(t.name || 'Unassigned').replace(/[^a-zA-Z0-9]/g, '_')}_${(t.date || '').replace(/[^a-zA-Z0-9]/g, '_')}`;
         const fileName = t.billFileName ? `${namePrefix}_${t.billFileName}` : `${namePrefix}_bill`;
-        const metadata = { name: fileName, parents: billsFolderId ? [billsFolderId] : [] };
+        // Fail rather than upload with no parent: a file created without
+        // "parents" lands in the top level of My Drive, which is how loose
+        // receipts ended up scattered outside the Credit Card Tracker folder.
+        if (!billsFolderId) {
+            console.error('Refusing to upload bill for transaction', t.id, '— no Bills folder resolved yet.');
+            return false;
+        }
+        const metadata = { name: fileName, parents: [billsFolderId] };
 
         const form = new FormData();
         form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
